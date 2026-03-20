@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.vscode/
+.env
+*.log
+apps/web/.vite/
+apps/web/dist/
+apps/signal/dist/
+crates/ladder-core/target/
+crates/ladder-core/pkg/
+*.code-workspace

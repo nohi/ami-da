@@ -1,0 +1,20 @@
+{
+  "name": "ami-da",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm:dev:signal\" \"npm:dev:web\"",
+    "dev:web": "npm run dev -w @amida/web",
+    "dev:signal": "npm run dev -w @amida/signal",
+    "build:wasm": "cd crates/ladder-core && wasm-pack build --target web --out-dir pkg",
+    "build": "npm run build -w @amida/protocol && npm run build -w @amida/web && npm run build -w @amida/signal",
+    "typecheck": "npm run typecheck -w @amida/protocol && npm run typecheck -w @amida/web && npm run typecheck -w @amida/signal"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
