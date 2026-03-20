@@ -12,6 +12,24 @@ if (!appRoot) {
     throw new Error("#app not found");
 }
 
+const loadingOverlay = document.createElement("div");
+loadingOverlay.className = "loading-screen";
+loadingOverlay.innerHTML = `
+  <div class="loading-card">
+    <div class="loading-spinner" aria-hidden="true"></div>
+    <div class="loading-text">読み込み中...</div>
+  </div>
+`;
+appRoot.appendChild(loadingOverlay);
+
+function setLoading(visible: boolean, message = "読み込み中..."): void {
+    const textNode = loadingOverlay.querySelector(".loading-text");
+    if (textNode) {
+        textNode.textContent = message;
+    }
+    loadingOverlay.style.display = visible ? "flex" : "none";
+}
+
 const userId = ensureStableUserId();
 let roomId = "";
 let selectedSkill: SkillType = "cut_rung";
@@ -52,6 +70,7 @@ roomMemberInfo.textContent = "参加人数: 0";
 const winnerBanner = document.createElement("div");
 winnerBanner.className = "winner-banner";
 winnerBanner.style.display = "none";
+let winnerBannerDismissed = false;
 
 const skillGrid = document.createElement("div");
 skillGrid.className = "skill-grid";
@@ -229,16 +248,79 @@ appRoot.append(overlay, winnerBanner);
 let hostEngine = new HostEngine(makeDefaultSettings(6));
 let wasmDecider: WasmHostDecider | null = await loadWasmCore();
 hostEngine.setDecider(wasmDecider);
-const app = new Application();
-await app.init({
-    resizeTo: window,
-    antialias: true,
-    backgroundAlpha: 0,
-    autoDensity: true,
-});
-appRoot.appendChild(app.canvas);
 
-const gameView = new GameView(app);
+let app: Application | null = null;
+let gameView: Pick<GameView, "render"> = { render: () => undefined };
+let pendingApp: Application | null = null;
+let rendererBound = false;
+function bindRendererEvents(rendererApp: Application): void {
+    if (rendererBound) {
+        return;
+    }
+    rendererBound = true;
+    rendererApp.canvas.addEventListener("click", (ev) => {
+        if (pendingTargetSkill === null || latestSnapshot.status !== "running") {
+            return;
+        }
+        const targeted = buildTargetedProposalFromClick(ev.clientX, ev.clientY, pendingTargetSkill);
+        pendingTargetSkill = null;
+        if (!targeted) {
+            statusBadge.textContent = "対象を選択できませんでした";
+            return;
+        }
+        sendProposal(targeted);
+    });
+}
+function attachRenderer(rendererApp: Application): void {
+    if (app === rendererApp) {
+        return;
+    }
+    app = rendererApp;
+    appRoot?.appendChild(rendererApp.canvas);
+    gameView = new GameView(rendererApp);
+    bindRendererEvents(rendererApp);
+}
+try {
+    pendingApp = new Application();
+    const initPromise = pendingApp.init({
+        resizeTo: window,
+        antialias: true,
+        backgroundAlpha: 0,
+        autoDensity: true,
+    });
+    const initTimeoutMs = 5000;
+    const initResult = await Promise.race([
+        initPromise.then(() => "ready" as const),
+        new Promise<"timeout">((resolve) => {
+            window.setTimeout(() => resolve("timeout"), initTimeoutMs);
+        }),
+    ]);
+    if (initResult === "ready") {
+        attachRenderer(pendingApp);
+        pendingApp = null;
+    } else {
+        const delayedApp = pendingApp;
+        statusBadge.textContent = "描画初期化待機中: ルーム機能のみ利用可能";
+        void initPromise
+            .then(() => {
+                if (delayedApp) {
+                    attachRenderer(delayedApp);
+                    statusBadge.textContent = "描画初期化完了";
+                }
+                pendingApp = null;
+            })
+            .catch((err) => {
+                console.error("renderer init failed", err);
+                statusBadge.textContent = "描画初期化失敗: ルーム機能のみ利用可能";
+                pendingApp = null;
+            });
+    }
+} catch (err) {
+    app = null;
+    pendingApp = null;
+    console.error("renderer init failed", err);
+    statusBadge.textContent = "描画初期化失敗: ルーム機能のみ利用可能";
+}
 let latestSnapshot: LadderSnapshot = {
     status: "waiting",
     serverTimeMs: Date.now(),
@@ -251,19 +333,6 @@ let latestSnapshot: LadderSnapshot = {
     visionJammedUntilMsByUserId: {},
     events: [],
 };
-
-app.canvas.addEventListener("click", (ev) => {
-    if (pendingTargetSkill === null || latestSnapshot.status !== "running") {
-        return;
-    }
-    const targeted = buildTargetedProposalFromClick(ev.clientX, ev.clientY, pendingTargetSkill);
-    pendingTargetSkill = null;
-    if (!targeted) {
-        statusBadge.textContent = "対象を選択できませんでした";
-        return;
-    }
-    sendProposal(targeted);
-});
 
 let rtc = new StarRtc(userId, {
     onGuestMessage: (fromUserId, msg) => {
@@ -307,6 +376,7 @@ let rtc = new StarRtc(userId, {
 updateRoleUi();
 
 createBtn.onclick = async () => {
+    setLoading(true, "ルーム作成中...");
     try {
         const settings = buildSettingsFromUi();
         hostEngine = new HostEngine(settings, wasmDecider);
@@ -318,14 +388,19 @@ createBtn.onclick = async () => {
         gameView.render(latestSnapshot, userId);
         updateRoleUi();
     } catch (err) {
+        console.error("create room failed", err);
         statusBadge.textContent = `作成失敗: ${String(err)}`;
+    } finally {
+        setLoading(false);
     }
 };
 
 async function joinCurrentRoom(): Promise<void> {
+    setLoading(true, "ルーム参加中...");
     roomId = roomInput.value.trim().toUpperCase();
     if (!roomId) {
         statusBadge.textContent = "ROOM ID必須";
+        setLoading(false);
         return;
     }
     try {
@@ -339,7 +414,10 @@ async function joinCurrentRoom(): Promise<void> {
         });
         updateRoleUi();
     } catch (err) {
-        statusBadge.textContent = `参加失敗: ${String(err)}`;
+        console.error("join room failed", err);
+        statusBadge.textContent = `参加失敗: ${describeJoinError(err)}`;
+    } finally {
+        setLoading(false);
     }
 }
 
@@ -368,6 +446,7 @@ restartBtn.onclick = () => {
     }
     hostEngine.restartRound();
     latestSnapshot = hostEngine.update(Date.now(), 0);
+    winnerBannerDismissed = false;
     winnerBanner.style.display = "none";
     statusBadge.textContent = "再抽選準備完了";
     broadcastSnapshot();
@@ -420,7 +499,7 @@ window.addEventListener("keydown", (ev) => {
 
 let lastFrameMs = performance.now();
 let lastSnapshotBroadcastMs = 0;
-app.ticker.add(() => {
+const tick = () => {
     const now = performance.now();
     const dtSec = Math.min(0.05, (now - lastFrameMs) / 1000);
     lastFrameMs = now;
@@ -440,7 +519,9 @@ app.ticker.add(() => {
 
     gameView.render(latestSnapshot, userId);
     updateSkillButtonsUi();
-});
+};
+
+window.setInterval(tick, 1000 / 30);
 
 function applyHostReply(msg: HostToGuestMessage): void {
     if (msg.kind === "snapshot") {
@@ -629,8 +710,11 @@ function updateOverlayByGameState(): void {
         overlay.classList.remove("running");
     }
     if (latestSnapshot.status === "finished") {
-        showWinnerBanner();
+        if (!winnerBannerDismissed) {
+            showWinnerBanner();
+        }
     } else {
+        winnerBannerDismissed = false;
         winnerBanner.style.display = "none";
     }
     updateRoleUi();
@@ -704,14 +788,18 @@ function buildTargetedProposalFromClick(
     clientY: number,
     skill: "add_rung" | "cut_rung",
 ): GuestToHostMessage | null {
-    const w = app.screen.width;
-    const h = app.screen.height;
+    const rendererApp = app;
+    if (!rendererApp) {
+        return null;
+    }
+    const w = rendererApp.screen.width;
+    const h = rendererApp.screen.height;
     const skillBarReserve = latestSnapshot.status === "running" ? 98 : 0;
     const bottomY = h - 30 - skillBarReserve;
     const marginX = 70;
     const laneGap = (w - marginX * 2) / Math.max(1, latestSnapshot.settings.laneCount - 1);
     const yScale = (bottomY - 40) / latestSnapshot.settings.totalHeight;
-    const rect = app.canvas.getBoundingClientRect();
+    const rect = rendererApp.canvas.getBoundingClientRect();
     const x = ((clientX - rect.left) / rect.width) * w;
     const y = ((clientY - rect.top) / rect.height) * h;
     const worldY = clamp((y - 40) / yScale, 0, latestSnapshot.settings.totalHeight);
@@ -808,7 +896,16 @@ function showWinnerBanner(): void {
         .sort((a, b) => a.lane - b.lane)
         .slice(0, Math.max(1, latestSnapshot.settings.runnerCount));
     const names = winners.map((w) => w.name).join(" / ");
-    winnerBanner.innerHTML = `<div class="winner-title">🎉 当選結果 🎉</div><div class="winner-names">${names}</div>`;
+    winnerBanner.innerHTML = `
+      <button class="winner-close" type="button" aria-label="抽選結果を閉じる">×</button>
+      <div class="winner-title">🎉 当選結果 🎉</div>
+      <div class="winner-names">${names}</div>
+    `;
+    const closeBtn = winnerBanner.querySelector<HTMLButtonElement>(".winner-close");
+    closeBtn?.addEventListener("click", () => {
+        winnerBannerDismissed = true;
+        winnerBanner.style.display = "none";
+    });
     winnerBanner.style.display = "block";
 }
 
@@ -851,6 +948,35 @@ function resolveNickname(raw: string): string {
     return trimmed.length > 0 ? trimmed : defaultNicknameFromUserId(userId);
 }
 
+function describeJoinError(err: unknown): string {
+    const text = String(err);
+    if (text.includes("room not found")) {
+        return "ルームが見つかりません（ID誤り・期限切れ・ホスト離脱の可能性）";
+    }
+    if (text.includes("room expired")) {
+        return "ルームの有効期限が切れました（ホスト接続が一定時間失われました）";
+    }
+    if (text.includes("target not found")) {
+        return "接続先が見つかりません（ホスト再接続中の可能性）";
+    }
+    if (text.includes("timed out waiting signaling response")) {
+        return "シグナリング応答タイムアウト（通信遅延）";
+    }
+    if (text.includes("timed out waiting signaling connection")) {
+        return "シグナリング接続タイムアウト（ネットワーク不通）";
+    }
+    if (text.includes("failed to connect signaling socket")) {
+        return "シグナリングサーバーへ接続できません";
+    }
+    if (text.includes("signaling socket closed")) {
+        return "シグナリング接続が切断されました";
+    }
+    if (text.includes("timed out waiting host data channel")) {
+        return "ホストとのP2P接続確立がタイムアウトしました（NAT/通信制限の可能性）";
+    }
+    return `不明なエラー: ${text}`;
+}
+
 function sendGuestNicknameUpdate(): void {
     if (rtc.isHost() || !roomId || latestSnapshot.status !== "waiting") {
         return;
@@ -875,4 +1001,6 @@ const roomParam = new URLSearchParams(window.location.search).get("room");
 if (roomParam && roomParam.trim().length > 0) {
     roomInput.value = roomParam.trim().toUpperCase();
     void joinCurrentRoom();
+} else {
+    setLoading(false);
 }

@@ -7,6 +7,7 @@ type Env = {
 type RoomState = {
   hostId: string;
   members: string[];
+  hostLastSeenMs?: number;
 };
 
 type SocketMeta = {
@@ -35,7 +36,7 @@ export class SignalRoom {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     const text = typeof message === "string" ? message : new TextDecoder().decode(message);
     let msg: SignalClientToServer;
     try {
@@ -47,36 +48,68 @@ export class SignalRoom {
 
     if (msg.type === "create_room") {
       const roomId = makeRoomId();
-      this.stateByRoomId.set(roomId, { hostId: msg.userId, members: [msg.userId] });
-      this.socketsByUserId.set(msg.userId, ws);
-      this.metaBySocket.set(ws, { roomId, userId: msg.userId });
+      const roomState: RoomState = { hostId: msg.userId, members: [msg.userId], hostLastSeenMs: Date.now() };
+      this.stateByRoomId.set(roomId, roomState);
+      await this.state.storage.put(`room:${roomId}`, roomState);
+      this.bindSocket(roomId, msg.userId, ws);
       this.send(ws, { type: "room_created", roomId, hostId: msg.userId });
       return;
     }
 
+    if (msg.type === "heartbeat") {
+      const roomId = msg.roomId?.trim().toUpperCase();
+      if (!roomId) {
+        return;
+      }
+      const room = await this.getRoom(roomId);
+      if (!room) {
+        return;
+      }
+      if (room.hostId !== msg.userId) {
+        return;
+      }
+      room.hostLastSeenMs = Date.now();
+      this.stateByRoomId.set(roomId, room);
+      await this.state.storage.put(`room:${roomId}`, room);
+      return;
+    }
+
     if (msg.type === "join_room") {
-      const room = this.stateByRoomId.get(msg.roomId);
+      const roomId = msg.roomId.trim().toUpperCase();
+      const room = await this.getRoom(roomId);
       if (!room) {
         this.send(ws, { type: "error", message: "room not found" });
+        return;
+      }
+      const hostSocket = this.socketsByUserId.get(room.hostId);
+      const hostOfflineTooLong =
+        !hostSocket &&
+        Date.now() - (room.hostLastSeenMs ?? 0) > HOST_RECONNECT_GRACE_MS;
+      if (hostOfflineTooLong) {
+        this.stateByRoomId.delete(roomId);
+        await this.state.storage.delete(`room:${roomId}`);
+        this.send(ws, { type: "error", message: "room expired (host offline too long)" });
         return;
       }
       if (!room.members.includes(msg.userId)) {
         room.members.push(msg.userId);
       }
-      this.socketsByUserId.set(msg.userId, ws);
-      this.metaBySocket.set(ws, { roomId: msg.roomId, userId: msg.userId });
+      this.stateByRoomId.set(roomId, room);
+      await this.state.storage.put(`room:${roomId}`, room);
+      this.bindSocket(roomId, msg.userId, ws);
       this.send(ws, {
         type: "room_joined",
-        roomId: msg.roomId,
+        roomId,
         hostId: room.hostId,
         peers: room.members.filter((u) => u !== msg.userId),
       });
-      this.broadcast(msg.roomId, { type: "peer_joined", roomId: msg.roomId, userId: msg.userId }, msg.userId);
+      this.broadcast(roomId, { type: "peer_joined", roomId, userId: msg.userId }, msg.userId);
       return;
     }
 
     if (msg.type === "relay") {
-      const room = this.stateByRoomId.get(msg.roomId);
+      const roomId = msg.roomId.trim().toUpperCase();
+      const room = await this.getRoom(roomId);
       if (!room) {
         this.send(ws, { type: "error", message: "room not found" });
         return;
@@ -88,7 +121,7 @@ export class SignalRoom {
       }
       this.send(target, {
         type: "relay",
-        roomId: msg.roomId,
+        roomId,
         toUserId: msg.toUserId,
         fromUserId: msg.fromUserId,
         payload: msg.payload,
@@ -96,32 +129,58 @@ export class SignalRoom {
     }
   }
 
-  webSocketClose(ws: WebSocket): void {
-    this.removeSocket(ws);
+  async webSocketClose(ws: WebSocket): Promise<void> {
+    await this.removeSocket(ws);
   }
 
-  webSocketError(ws: WebSocket): void {
-    this.removeSocket(ws);
+  async webSocketError(ws: WebSocket): Promise<void> {
+    await this.removeSocket(ws);
   }
 
-  private removeSocket(ws: WebSocket): void {
+  private async removeSocket(ws: WebSocket): Promise<void> {
     const meta = this.metaBySocket.get(ws);
     if (!meta) {
       return;
     }
     this.metaBySocket.delete(ws);
-    this.socketsByUserId.delete(meta.userId);
+    if (this.socketsByUserId.get(meta.userId) === ws) {
+      this.socketsByUserId.delete(meta.userId);
+    }
 
-    const room = this.stateByRoomId.get(meta.roomId);
+    const room = await this.getRoom(meta.roomId);
     if (!room) {
       return;
     }
+
+    // Keep host-only rooms reserved for host reconnect after transient disconnects.
+    if (room.hostId === meta.userId && room.members.length === 1 && room.members[0] === meta.userId) {
+      room.hostLastSeenMs = Date.now();
+      this.stateByRoomId.set(meta.roomId, room);
+      await this.state.storage.put(`room:${meta.roomId}`, room);
+      return;
+    }
+
     room.members = room.members.filter((u) => u !== meta.userId);
     if (room.members.length === 0 || room.hostId === meta.userId) {
       this.stateByRoomId.delete(meta.roomId);
+      await this.state.storage.delete(`room:${meta.roomId}`);
       return;
     }
+    await this.state.storage.put(`room:${meta.roomId}`, room);
     this.broadcast(meta.roomId, { type: "peer_left", roomId: meta.roomId, userId: meta.userId });
+  }
+
+  private async getRoom(roomId: string): Promise<RoomState | null> {
+    const inMemory = this.stateByRoomId.get(roomId);
+    if (inMemory) {
+      return inMemory;
+    }
+    const stored = await this.state.storage.get<RoomState>(`room:${roomId}`);
+    if (stored) {
+      this.stateByRoomId.set(roomId, stored);
+      return stored;
+    }
+    return null;
   }
 
   private send(socket: WebSocket, msg: SignalServerToClient): void {
@@ -130,6 +189,15 @@ export class SignalRoom {
     } catch {
       // noop
     }
+  }
+
+  private bindSocket(roomId: string, userId: string, ws: WebSocket): void {
+    const existing = this.socketsByUserId.get(userId);
+    if (existing && existing !== ws) {
+      this.metaBySocket.delete(existing);
+    }
+    this.socketsByUserId.set(userId, ws);
+    this.metaBySocket.set(ws, { roomId, userId });
   }
 
   private broadcast(roomId: string, msg: SignalServerToClient, exceptUserId?: string): void {
@@ -148,6 +216,8 @@ export class SignalRoom {
     }
   }
 }
+
+const HOST_RECONNECT_GRACE_MS = 45_000;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

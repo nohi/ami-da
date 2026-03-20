@@ -13,10 +13,31 @@ type PeerCallbacks = {
     onPeerChannelOpen?: (userId: string) => void;
 };
 
-const signalUrl = import.meta.env.VITE_SIGNAL_URL;
-if (!signalUrl || signalUrl.trim().length === 0) {
-    throw new Error("VITE_SIGNAL_URL is required");
+function resolveSignalUrl(): string {
+    const fallback = "wss://amida-signal.nohi.workers.dev";
+    const raw = (import.meta.env.VITE_SIGNAL_URL ?? "wss://amida-signal.nohi.workers.dev").trim();
+    if (raw.length === 0) {
+        return fallback;
+    }
+    const normalized = raw
+        .replace(/^https:\/\//i, "wss://")
+        .replace(/^http:\/\//i, "ws://");
+    const secureAdjusted =
+        window.location.protocol === "https:" && /^ws:\/\//i.test(normalized)
+            ? normalized.replace(/^ws:\/\//i, "wss://")
+            : normalized;
+    try {
+        const parsed = new URL(secureAdjusted);
+        if (parsed.protocol === "ws:" || parsed.protocol === "wss:") {
+            return parsed.toString();
+        }
+        return fallback;
+    } catch {
+        return fallback;
+    }
 }
+
+const signalUrl = resolveSignalUrl();
 
 const stunUrl = (import.meta.env.VITE_STUN_URL ?? "").trim();
 const rtcConfig: RTCConfiguration = {
@@ -26,17 +47,17 @@ const rtcConfig: RTCConfiguration = {
 export class StarRtc {
     private userId: string;
     private roomId = "";
-    private ws: WebSocket;
+    private ws: WebSocket | null = null;
     private hostId = "";
     private peers = new Map<string, { pc: RTCPeerConnection; dc?: RTCDataChannel }>();
     private callbacks: PeerCallbacks;
     private readonly signalTimeoutMs = 12_000;
+    private heartbeatTimerId: number | null = null;
+    private reconnectTimerId: number | null = null;
 
     constructor(userId: string, callbacks: PeerCallbacks) {
         this.userId = userId;
         this.callbacks = callbacks;
-        this.ws = new WebSocket(signalUrl);
-        this.ws.addEventListener("message", (e) => this.onSignalMessage(String(e.data)));
     }
 
     createRoom(): Promise<string> {
@@ -48,6 +69,7 @@ export class StarRtc {
             ).then((msg) => {
                 this.roomId = msg.roomId;
                 this.hostId = msg.hostId;
+                this.startHostHeartbeat();
                 return msg.roomId;
             });
         });
@@ -63,6 +85,7 @@ export class StarRtc {
             ).then(() => undefined);
         });
         this.roomId = roomId;
+        await this.awaitHostChannelReady(this.signalTimeoutMs);
     }
 
     isHost(): boolean {
@@ -96,6 +119,9 @@ export class StarRtc {
 
         if (msg.type === "room_joined") {
             this.hostId = msg.hostId;
+            if (this.isHost()) {
+                this.startHostHeartbeat();
+            }
             for (const peerId of msg.peers) {
                 if (this.userId === this.hostId) {
                     this.ensureHostPeer(peerId).catch(console.error);
@@ -168,6 +194,7 @@ export class StarRtc {
                 return;
             }
             const pc = new RTCPeerConnection(rtcConfig);
+            this.peers.set(fromUserId, { pc });
             pc.ondatachannel = (event) => this.bindDataChannel(fromUserId, event.channel);
             pc.onicecandidate = (e) => {
                 if (!e.candidate) {
@@ -192,7 +219,6 @@ export class StarRtc {
                 toUserId: fromUserId,
                 payload: { kind: "answer", sdp: answer },
             });
-            this.peers.set(fromUserId, { pc });
             return;
         }
 
@@ -238,14 +264,18 @@ export class StarRtc {
     }
 
     private sendSignal(msg: SignalClientToServer): void {
-        if (this.ws.readyState !== WebSocket.OPEN) {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
             throw new Error("signaling socket is not connected");
         }
         this.ws.send(JSON.stringify(msg));
     }
 
     private async awaitReady<T>(fn: () => Promise<T>): Promise<T> {
-        if (this.ws.readyState === WebSocket.OPEN) {
+        const ws = this.ensureSocket();
+        if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+            this.ws = this.createSocket();
+        }
+        if (this.ws?.readyState === WebSocket.OPEN) {
             return fn();
         }
         await new Promise<void>((resolve, reject) => {
@@ -267,15 +297,36 @@ export class StarRtc {
             }, this.signalTimeoutMs);
             const cleanup = () => {
                 window.clearTimeout(timer);
-                this.ws.removeEventListener("open", onOpen);
-                this.ws.removeEventListener("error", onError);
-                this.ws.removeEventListener("close", onClose);
+                this.ws?.removeEventListener("open", onOpen);
+                this.ws?.removeEventListener("error", onError);
+                this.ws?.removeEventListener("close", onClose);
             };
-            this.ws.addEventListener("open", onOpen);
-            this.ws.addEventListener("error", onError);
-            this.ws.addEventListener("close", onClose);
+            this.ws?.addEventListener("open", onOpen);
+            this.ws?.addEventListener("error", onError);
+            this.ws?.addEventListener("close", onClose);
         });
         return fn();
+    }
+
+    private ensureSocket(): WebSocket {
+        if (!this.ws) {
+            this.ws = this.createSocket();
+        }
+        return this.ws;
+    }
+
+    private createSocket(): WebSocket {
+        const ws = new WebSocket(signalUrl);
+        ws.addEventListener("message", (e) => this.onSignalMessage(String(e.data)));
+        ws.addEventListener("close", () => {
+            if (this.ws !== ws) {
+                return;
+            }
+            if (this.isHost() && this.roomId.length > 0) {
+                this.scheduleHostReconnect();
+            }
+        });
+        return ws;
     }
 
     private waitForSignal<T extends SignalServerToClient>(
@@ -311,11 +362,76 @@ export class StarRtc {
             }, timeoutMs);
             const cleanup = () => {
                 window.clearTimeout(timer);
-                this.ws.removeEventListener("message", onMessage);
-                this.ws.removeEventListener("close", onClose);
+                this.ws?.removeEventListener("message", onMessage);
+                this.ws?.removeEventListener("close", onClose);
             };
-            this.ws.addEventListener("message", onMessage);
-            this.ws.addEventListener("close", onClose);
+            this.ws?.addEventListener("message", onMessage);
+            this.ws?.addEventListener("close", onClose);
         });
+    }
+
+    private async awaitHostChannelReady(timeoutMs: number): Promise<void> {
+        if (this.isHost()) {
+            return;
+        }
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < timeoutMs) {
+            const hostPeer = this.peers.get(this.hostId);
+            if (hostPeer?.dc?.readyState === "open") {
+                return;
+            }
+            await new Promise<void>((resolve) => {
+                window.setTimeout(resolve, 120);
+            });
+        }
+        throw new Error("timed out waiting host data channel");
+    }
+
+    private startHostHeartbeat(): void {
+        if (!this.isHost() || this.roomId.length === 0) {
+            return;
+        }
+        if (this.heartbeatTimerId !== null) {
+            return;
+        }
+        this.heartbeatTimerId = window.setInterval(() => {
+            try {
+                this.sendSignal({ type: "heartbeat", userId: this.userId, roomId: this.roomId });
+            } catch {
+                this.scheduleHostReconnect();
+            }
+        }, 10_000);
+    }
+
+    private scheduleHostReconnect(): void {
+        if (!this.isHost() || this.roomId.length === 0) {
+            return;
+        }
+        if (this.reconnectTimerId !== null) {
+            return;
+        }
+        this.reconnectTimerId = window.setTimeout(() => {
+            this.reconnectTimerId = null;
+            void this.reconnectHostSignal();
+        }, 800);
+    }
+
+    private async reconnectHostSignal(): Promise<void> {
+        if (!this.isHost() || this.roomId.length === 0) {
+            return;
+        }
+        try {
+            this.ws = this.createSocket();
+            await this.awaitReady(async () => undefined);
+            this.sendSignal({ type: "join_room", roomId: this.roomId, userId: this.userId });
+            await this.waitForSignal(
+                (msg): msg is Extract<SignalServerToClient, { type: "room_joined" }> =>
+                    msg.type === "room_joined" && msg.roomId === this.roomId,
+                this.signalTimeoutMs,
+            );
+            this.startHostHeartbeat();
+        } catch {
+            this.scheduleHostReconnect();
+        }
     }
 }

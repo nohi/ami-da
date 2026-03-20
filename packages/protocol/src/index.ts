@@ -125,6 +125,7 @@ export type GuestToHostMessage = SkillProposal | SnapshotRequest;
 export type SignalClientToServer =
     | { type: "create_room"; userId: string }
     | { type: "join_room"; roomId: string; userId: string }
+    | { type: "heartbeat"; userId: string; roomId?: string }
     | { type: "relay"; roomId: string; toUserId: string; fromUserId: string; payload: unknown };
 
 export type SignalServerToClient =
