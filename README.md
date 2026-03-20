@@ -53,6 +53,7 @@ cp apps/web/.env.example apps/web/.env
 
 - ビルド時は `VITE_BASE_PATH=/ami-da/` を CI 側で設定しています。
 - 既存ファイルを残すため `keep_files: true` でデプロイします。
+- Pages 本番では `VITE_WASM_JS_URL` を未設定にしてください（TSフォールバックで動作）。
 
 ## Cloudflare Workers シグナリング
 
@@ -73,6 +74,6 @@ npx wrangler deploy --config apps/signal/wrangler.toml
 ## 実装メモ
 
 - ホスト判定は Rust/WASM の `validate_skill` を優先利用（未生成時はTSへフォールバック）。
-- WASM生成物は `crates/ladder-core/pkg` に出力される。
+- WASM生成物は `crates/ladder-core/pkg` に出力される（ローカル検証向け）。
 - 追加干渉: 透明化、視野妨害。
 - 強化演出: ワープ、ジャンプ、線斬り。

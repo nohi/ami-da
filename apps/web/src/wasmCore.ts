@@ -12,7 +12,10 @@ type WasmModule = {
 
 export async function loadWasmCore(): Promise<WasmHostDecider | null> {
   try {
-    const wasmPath = "../../../crates/ladder-core/pkg/ladder_core.js";
+    const wasmPath = (import.meta.env.VITE_WASM_JS_URL as string | undefined)?.trim();
+    if (!wasmPath) {
+      return null;
+    }
     const dynamicImport = new Function("p", "return import(p)") as (p: string) => Promise<unknown>;
     const mod = (await dynamicImport(wasmPath)) as WasmModule;
 
