@@ -333,6 +333,7 @@ let latestSnapshot: LadderSnapshot = {
     visionJammedUntilMsByUserId: {},
     events: [],
 };
+let guestRenderSnapshot: LadderSnapshot | null = null;
 
 let rtc = new StarRtc(userId, {
     onGuestMessage: (fromUserId, msg) => {
@@ -517,7 +518,13 @@ const tick = () => {
         updateOverlayByGameState();
     }
 
-    gameView.render(latestSnapshot, userId);
+    const renderSnapshot = rtc.isHost()
+        ? latestSnapshot
+        : interpolateGuestSnapshot(guestRenderSnapshot, latestSnapshot, dtSec);
+    if (!rtc.isHost()) {
+        guestRenderSnapshot = renderSnapshot;
+    }
+    gameView.render(renderSnapshot, userId);
     updateSkillButtonsUi();
 };
 
@@ -526,12 +533,18 @@ window.setInterval(tick, 1000 / 30);
 function applyHostReply(msg: HostToGuestMessage): void {
     if (msg.kind === "snapshot") {
         latestSnapshot = msg.snapshot;
+        if (!rtc.isHost() && guestRenderSnapshot && guestRenderSnapshot.status !== latestSnapshot.status) {
+            guestRenderSnapshot = null;
+        }
         updateOverlayByGameState();
         updateSkillButtonsUi();
         return;
     }
     if (msg.kind === "skill_accept") {
         latestSnapshot = msg.snapshot;
+        if (!rtc.isHost() && guestRenderSnapshot && guestRenderSnapshot.status !== latestSnapshot.status) {
+            guestRenderSnapshot = null;
+        }
         statusBadge.textContent = "干渉成功";
         updateOverlayByGameState();
         updateSkillButtonsUi();
@@ -549,6 +562,9 @@ function applyHostReply(msg: HostToGuestMessage): void {
     }
     if (msg.kind === "result") {
         latestSnapshot = msg.snapshot;
+        if (!rtc.isHost() && guestRenderSnapshot && guestRenderSnapshot.status !== latestSnapshot.status) {
+            guestRenderSnapshot = null;
+        }
         updateOverlayByGameState();
         updateSkillButtonsUi();
     }
@@ -978,6 +994,46 @@ function describeJoinError(err: unknown): string {
         return "ホストとのP2P接続確立がタイムアウトしました（NAT/通信制限・ブラウザ差異の可能性）";
     }
     return `不明なエラー: ${text}`;
+}
+
+function interpolateGuestSnapshot(
+    previous: LadderSnapshot | null,
+    target: LadderSnapshot,
+    dtSec: number,
+): LadderSnapshot {
+    if (!previous || previous.status !== target.status || previous.runners.length !== target.runners.length) {
+        return cloneSnapshotForRender(target);
+    }
+    const prevByUserId = new Map(previous.runners.map((r) => [r.userId, r]));
+    const alpha = 1 - Math.exp(-dtSec * 12);
+    return {
+        ...target,
+        runners: target.runners.map((runner) => {
+            const prev = prevByUserId.get(runner.userId);
+            if (!prev || runner.finished) {
+                return { ...runner };
+            }
+            return {
+                ...runner,
+                lane: lerp(prev.lane, runner.lane, alpha),
+                y: lerp(prev.y, runner.y, alpha),
+                speed: lerp(prev.speed, runner.speed, alpha),
+            };
+        }),
+    };
+}
+
+function cloneSnapshotForRender(snapshot: LadderSnapshot): LadderSnapshot {
+    return {
+        ...snapshot,
+        runners: snapshot.runners.map((r) => ({ ...r })),
+        rungs: snapshot.rungs.map((r) => ({ ...r })),
+        effects: snapshot.effects.map((e) => ({ ...e })),
+    };
+}
+
+function lerp(a: number, b: number, t: number): number {
+    return a + (b - a) * t;
 }
 
 function sendGuestNicknameUpdate(): void {
