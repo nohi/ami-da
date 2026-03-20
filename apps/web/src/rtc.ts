@@ -95,7 +95,13 @@ export class StarRtc {
             ).then(() => undefined);
         });
         this.roomId = roomId;
-        await this.awaitHostChannelReady(this.signalTimeoutMs);
+        try {
+            await this.awaitHostChannelReady(this.signalTimeoutMs);
+        } catch (err) {
+            if (!String(err).includes("timed out waiting host data channel")) {
+                throw err;
+            }
+        }
     }
 
     isHost(): boolean {
@@ -103,10 +109,12 @@ export class StarRtc {
     }
 
     broadcast(msg: HostToGuestMessage): void {
-        for (const [, peer] of this.peers) {
+        for (const [peerId, peer] of this.peers) {
             if (peer.dc?.readyState === "open") {
                 peer.dc.send(JSON.stringify(msg));
+                continue;
             }
+            this.sendSignalData(peerId, msg);
         }
     }
 
@@ -114,13 +122,19 @@ export class StarRtc {
         const peer = this.peers.get(userId);
         if (peer?.dc?.readyState === "open") {
             peer.dc.send(JSON.stringify(msg));
+            return;
         }
+        this.sendSignalData(userId, msg);
     }
 
     sendToHost(msg: GuestToHostMessage): void {
         const hostPeer = this.peers.get(this.hostId);
         if (hostPeer?.dc?.readyState === "open") {
             hostPeer.dc.send(JSON.stringify(msg));
+            return;
+        }
+        if (this.hostId.length > 0) {
+            this.sendSignalData(this.hostId, msg);
         }
     }
 
@@ -205,7 +219,12 @@ export class StarRtc {
     }
 
     private async handleRelay(fromUserId: string, payload: unknown): Promise<void> {
-        const p = payload as { kind: "offer" | "answer" | "ice"; sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
+        const p = payload as {
+            kind: "offer" | "answer" | "ice" | "app_data";
+            sdp?: RTCSessionDescriptionInit;
+            candidate?: RTCIceCandidateInit;
+            data?: GuestToHostMessage | HostToGuestMessage;
+        };
 
         if (p.kind === "offer") {
             if (!p.sdp) {
@@ -258,6 +277,15 @@ export class StarRtc {
                 return;
             }
             await peer.pc.addIceCandidate(new RTCIceCandidate(p.candidate));
+            return;
+        }
+
+        if (p.kind === "app_data" && p.data) {
+            if (this.userId === this.hostId) {
+                this.callbacks.onGuestMessage?.(fromUserId, p.data as GuestToHostMessage);
+            } else {
+                this.callbacks.onHostMessage?.(p.data as HostToGuestMessage);
+            }
         }
     }
 
@@ -292,6 +320,19 @@ export class StarRtc {
             throw new Error("signaling socket is not connected");
         }
         this.ws.send(JSON.stringify(msg));
+    }
+
+    private sendSignalData(toUserId: string, data: GuestToHostMessage | HostToGuestMessage): void {
+        if (this.roomId.length === 0) {
+            return;
+        }
+        this.sendSignal({
+            type: "relay",
+            roomId: this.roomId,
+            fromUserId: this.userId,
+            toUserId,
+            payload: { kind: "app_data", data },
+        });
     }
 
     private queueIceCandidate(peerId: string, candidate: RTCIceCandidateInit): void {
