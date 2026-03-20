@@ -975,7 +975,7 @@ function describeJoinError(err: unknown): string {
         return "シグナリング接続が切断されました";
     }
     if (text.includes("timed out waiting host data channel")) {
-        return "ホストとのP2P接続確立がタイムアウトしました（NAT/通信制限の可能性）";
+        return "ホストとのP2P接続確立がタイムアウトしました（NAT/通信制限・ブラウザ差異の可能性）";
     }
     return `不明なエラー: ${text}`;
 }

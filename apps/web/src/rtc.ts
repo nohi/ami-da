@@ -40,8 +40,14 @@ function resolveSignalUrl(): string {
 const signalUrl = resolveSignalUrl();
 
 const stunUrl = (import.meta.env.VITE_STUN_URL ?? "").trim();
+const defaultStunUrls = ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"];
+const resolvedIceServerUrls =
+    stunUrl.length > 0
+        ? stunUrl.split(",").map((v: string) => v.trim()).filter((v: string) => v.length > 0)
+        : defaultStunUrls;
 const rtcConfig: RTCConfiguration = {
-    iceServers: stunUrl.length > 0 ? [{ urls: stunUrl }] : [],
+    iceServers: [{ urls: resolvedIceServerUrls }],
+    iceCandidatePoolSize: 4,
 };
 
 export class StarRtc {
@@ -50,6 +56,7 @@ export class StarRtc {
     private ws: WebSocket | null = null;
     private hostId = "";
     private peers = new Map<string, { pc: RTCPeerConnection; dc?: RTCDataChannel }>();
+    private pendingIceByPeerId = new Map<string, RTCIceCandidateInit[]>();
     private callbacks: PeerCallbacks;
     private readonly signalTimeoutMs = 12_000;
     private heartbeatTimerId: number | null = null;
@@ -221,6 +228,7 @@ export class StarRtc {
             };
 
             await pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
+            await this.flushPendingIce(fromUserId);
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             this.sendSignal({
@@ -234,16 +242,21 @@ export class StarRtc {
         }
 
         const peer = this.peers.get(fromUserId);
-        if (!peer) {
-            return;
-        }
 
         if (p.kind === "answer" && p.sdp) {
+            if (!peer) {
+                return;
+            }
             await peer.pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
+            await this.flushPendingIce(fromUserId);
             return;
         }
 
         if (p.kind === "ice" && p.candidate) {
+            if (!peer || !peer.pc.remoteDescription) {
+                this.queueIceCandidate(fromUserId, p.candidate);
+                return;
+            }
             await peer.pc.addIceCandidate(new RTCIceCandidate(p.candidate));
         }
     }
@@ -279,6 +292,27 @@ export class StarRtc {
             throw new Error("signaling socket is not connected");
         }
         this.ws.send(JSON.stringify(msg));
+    }
+
+    private queueIceCandidate(peerId: string, candidate: RTCIceCandidateInit): void {
+        const pending = this.pendingIceByPeerId.get(peerId) ?? [];
+        pending.push(candidate);
+        this.pendingIceByPeerId.set(peerId, pending);
+    }
+
+    private async flushPendingIce(peerId: string): Promise<void> {
+        const peer = this.peers.get(peerId);
+        if (!peer || !peer.pc.remoteDescription) {
+            return;
+        }
+        const pending = this.pendingIceByPeerId.get(peerId);
+        if (!pending || pending.length === 0) {
+            return;
+        }
+        this.pendingIceByPeerId.delete(peerId);
+        for (const candidate of pending) {
+            await peer.pc.addIceCandidate(new RTCIceCandidate(candidate));
+        }
     }
 
     private async awaitReady<T>(fn: () => Promise<T>): Promise<T> {
