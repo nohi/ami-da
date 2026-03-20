@@ -48,6 +48,9 @@ guestNicknameInput.value = defaultNicknameFromUserId(userId);
 
 const joinBtn = document.createElement("button");
 joinBtn.textContent = "参加";
+const shareRoomUrlBtn = document.createElement("button");
+shareRoomUrlBtn.textContent = "ルームURL共有";
+shareRoomUrlBtn.disabled = true;
 
 const startBtn = document.createElement("button");
 startBtn.textContent = "抽選スタート";
@@ -64,6 +67,9 @@ statusBadge.textContent = "未接続";
 const roomMemberInfo = document.createElement("div");
 roomMemberInfo.className = "warn";
 roomMemberInfo.textContent = "参加人数: 0";
+const flashMessage = document.createElement("div");
+flashMessage.className = "flash-message";
+flashMessage.style.display = "none";
 const winnerBanner = document.createElement("div");
 winnerBanner.className = "winner-banner";
 winnerBanner.style.display = "none";
@@ -205,7 +211,7 @@ row1.append(hostNicknameInput, createBtn);
 
 const rowJoin = document.createElement("div");
 rowJoin.className = "row";
-rowJoin.append(guestNicknameInput, roomInput, joinBtn);
+rowJoin.append(guestNicknameInput, roomInput, joinBtn, shareRoomUrlBtn);
 
 const row2 = document.createElement("div");
 row2.className = "row";
@@ -264,7 +270,7 @@ skillTableBody.append(
 hostRows[5].append(skillTable);
 
 overlay.append(setupSection, skillGrid);
-appRoot.append(overlay, winnerBanner);
+appRoot.append(overlay, flashMessage, winnerBanner);
 
 let hostEngine = new HostEngine(makeDefaultSettings(6));
 let wasmDecider: WasmHostDecider | null = await loadWasmCore();
@@ -445,6 +451,29 @@ async function joinCurrentRoom(): Promise<void> {
 
 joinBtn.onclick = () => {
     void joinCurrentRoom();
+};
+let flashTimerId: number | null = null;
+shareRoomUrlBtn.onclick = async () => {
+    if (!canControlHost() || roomId.length === 0) {
+        return;
+    }
+    const shareUrl = new URL(window.location.href);
+    shareUrl.searchParams.set("room", roomId);
+    try {
+        await navigator.clipboard.writeText(shareUrl.toString());
+        flashMessage.textContent = "共有URLをコピーしました";
+        flashMessage.style.display = "block";
+        if (flashTimerId !== null) {
+            window.clearTimeout(flashTimerId);
+        }
+        flashTimerId = window.setTimeout(() => {
+            flashMessage.style.display = "none";
+            flashTimerId = null;
+        }, 2000);
+    } catch (err) {
+        console.error("share url copy failed", err);
+        statusBadge.textContent = "共有URLコピーに失敗しました";
+    }
 };
 
 startBtn.onclick = () => {
@@ -729,6 +758,8 @@ function updateRoleUi(): void {
     createBtn.style.display = "inline-block";
     roomInput.style.display = "inline-block";
     joinBtn.style.display = "inline-block";
+    shareRoomUrlBtn.style.display = "inline-block";
+    shareRoomUrlBtn.disabled = !hostReady;
 
     // ホスト設定はホストがルーム作成完了後にのみ表示
     row2.style.display = hostReady ? "flex" : "none";
