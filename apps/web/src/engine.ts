@@ -100,6 +100,13 @@ export class HostEngine {
         });
     }
 
+    unregisterPlayer(userId: string): void {
+        this.playerNicknames.delete(userId);
+        this.skillUsage.delete(userId);
+        this.skillLastUseMs.delete(userId);
+        this.visionJammedUntilMsByUserId.delete(userId);
+    }
+
     private displayName(userId: string): string {
         return this.playerNicknames.get(userId) ?? userId;
     }
@@ -368,11 +375,17 @@ export class HostEngine {
 
         if (msg.skill === "vision_jam") {
             const until = nowMs + (decision.durationMs ?? msg.payload.durationMs ?? 2800);
-            const allUsers = [...this.skillUsage.keys()].filter((userId) => userId !== msg.fromUserId);
+            const allUsers = [...this.skillUsage.keys()].filter((userId) => {
+                if (userId === msg.fromUserId) {
+                    return false;
+                }
+                return this.playerNicknames.has(userId);
+            });
             const picked = allUsers.length > 0 ? allUsers[(Math.random() * allUsers.length) | 0] : null;
-            if (picked) {
-                this.visionJammedUntilMsByUserId.set(picked, until);
+            if (!picked) {
+                return { kind: "skill_reject", proposalId: msg.proposalId, byHostId: "host", reason: "target not found" };
             }
+            this.visionJammedUntilMsByUserId.set(picked, until);
             this.events.push(`${this.displayName(msg.fromUserId)} が視野妨害`);
         }
 

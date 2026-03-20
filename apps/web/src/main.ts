@@ -385,7 +385,11 @@ let rtc = new StarRtc(userId, {
         hostEngine.registerPlayer(uid);
         broadcastSnapshot();
     },
-    onPeerLeft: () => {
+    onPeerLeft: (uid) => {
+        if (rtc.isHost()) {
+            hostEngine.unregisterPlayer(uid);
+            broadcastSnapshot();
+        }
         statusBadge.textContent = "参加者離脱";
     },
     onPeerChannelOpen: (uid) => {
