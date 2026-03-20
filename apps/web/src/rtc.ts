@@ -54,6 +54,9 @@ export class StarRtc {
     private readonly signalTimeoutMs = 12_000;
     private heartbeatTimerId: number | null = null;
     private reconnectTimerId: number | null = null;
+    private lastHeartbeatAckMs = 0;
+    private readonly heartbeatIntervalMs = 3_000;
+    private readonly heartbeatAckTimeoutMs = 9_000;
 
     constructor(userId: string, callbacks: PeerCallbacks) {
         this.userId = userId;
@@ -120,12 +123,20 @@ export class StarRtc {
         if (msg.type === "room_joined") {
             this.hostId = msg.hostId;
             if (this.isHost()) {
+                this.lastHeartbeatAckMs = Date.now();
                 this.startHostHeartbeat();
             }
             for (const peerId of msg.peers) {
                 if (this.userId === this.hostId) {
                     this.ensureHostPeer(peerId).catch(console.error);
                 }
+            }
+            return;
+        }
+
+        if (msg.type === "heartbeat_ack") {
+            if (this.isHost() && msg.roomId === this.roomId) {
+                this.lastHeartbeatAckMs = Date.now();
             }
             return;
         }
@@ -392,15 +403,22 @@ export class StarRtc {
             return;
         }
         if (this.heartbeatTimerId !== null) {
-            return;
+            window.clearInterval(this.heartbeatTimerId);
+            this.heartbeatTimerId = null;
         }
+        this.lastHeartbeatAckMs = Date.now();
         this.heartbeatTimerId = window.setInterval(() => {
+            const now = Date.now();
+            if (now - this.lastHeartbeatAckMs > this.heartbeatAckTimeoutMs) {
+                this.scheduleHostReconnect();
+                return;
+            }
             try {
                 this.sendSignal({ type: "heartbeat", userId: this.userId, roomId: this.roomId });
             } catch {
                 this.scheduleHostReconnect();
             }
-        }, 10_000);
+        }, this.heartbeatIntervalMs);
     }
 
     private scheduleHostReconnect(): void {
@@ -429,6 +447,7 @@ export class StarRtc {
                     msg.type === "room_joined" && msg.roomId === this.roomId,
                 this.signalTimeoutMs,
             );
+            this.lastHeartbeatAckMs = Date.now();
             this.startHostHeartbeat();
         } catch {
             this.scheduleHostReconnect();

@@ -8,6 +8,7 @@ type RoomState = {
   hostId: string;
   members: string[];
   hostLastSeenMs?: number;
+  hostConnected?: boolean;
 };
 
 type SocketMeta = {
@@ -48,7 +49,12 @@ export class SignalRoom {
 
     if (msg.type === "create_room") {
       const roomId = makeRoomId();
-      const roomState: RoomState = { hostId: msg.userId, members: [msg.userId], hostLastSeenMs: Date.now() };
+      const roomState: RoomState = {
+        hostId: msg.userId,
+        members: [msg.userId],
+        hostLastSeenMs: Date.now(),
+        hostConnected: true,
+      };
       this.stateByRoomId.set(roomId, roomState);
       await this.state.storage.put(`room:${roomId}`, roomState);
       this.bindSocket(roomId, msg.userId, ws);
@@ -69,8 +75,10 @@ export class SignalRoom {
         return;
       }
       room.hostLastSeenMs = Date.now();
+      room.hostConnected = true;
       this.stateByRoomId.set(roomId, room);
       await this.state.storage.put(`room:${roomId}`, room);
+      this.send(ws, { type: "heartbeat_ack", roomId, atMs: Date.now() });
       return;
     }
 
@@ -82,17 +90,22 @@ export class SignalRoom {
         return;
       }
       const hostSocket = this.socketsByUserId.get(room.hostId);
-      const hostOfflineTooLong =
-        !hostSocket &&
-        Date.now() - (room.hostLastSeenMs ?? 0) > HOST_RECONNECT_GRACE_MS;
-      if (hostOfflineTooLong) {
-        this.stateByRoomId.delete(roomId);
-        await this.state.storage.delete(`room:${roomId}`);
-        this.send(ws, { type: "error", message: "room expired (host offline too long)" });
+      if (!hostSocket) {
+        if (Date.now() - (room.hostLastSeenMs ?? 0) > HOST_RECONNECT_GRACE_MS) {
+          this.stateByRoomId.delete(roomId);
+          await this.state.storage.delete(`room:${roomId}`);
+          this.send(ws, { type: "error", message: "room expired (host offline too long)" });
+          return;
+        }
+        this.send(ws, { type: "error", message: "host offline" });
         return;
       }
       if (!room.members.includes(msg.userId)) {
         room.members.push(msg.userId);
+      }
+      if (msg.userId === room.hostId) {
+        room.hostConnected = true;
+        room.hostLastSeenMs = Date.now();
       }
       this.stateByRoomId.set(roomId, room);
       await this.state.storage.put(`room:${roomId}`, room);
@@ -155,6 +168,7 @@ export class SignalRoom {
     // Keep host-only rooms reserved for host reconnect after transient disconnects.
     if (room.hostId === meta.userId && room.members.length === 1 && room.members[0] === meta.userId) {
       room.hostLastSeenMs = Date.now();
+      room.hostConnected = false;
       this.stateByRoomId.set(meta.roomId, room);
       await this.state.storage.put(`room:${meta.roomId}`, room);
       return;

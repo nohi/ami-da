@@ -959,6 +959,9 @@ function describeJoinError(err: unknown): string {
     if (text.includes("target not found")) {
         return "接続先が見つかりません（ホスト再接続中の可能性）";
     }
+    if (text.includes("host offline")) {
+        return "ホストが再接続中です。数秒待って再試行してください";
+    }
     if (text.includes("timed out waiting signaling response")) {
         return "シグナリング応答タイムアウト（通信遅延）";
     }

@@ -131,6 +131,7 @@ export type SignalClientToServer =
 export type SignalServerToClient =
     | { type: "room_created"; roomId: string; hostId: string }
     | { type: "room_joined"; roomId: string; hostId: string; peers: string[] }
+    | { type: "heartbeat_ack"; roomId: string; atMs: number }
     | { type: "peer_joined"; roomId: string; userId: string }
     | { type: "peer_left"; roomId: string; userId: string }
     | { type: "relay"; roomId: string; toUserId: string; fromUserId: string; payload: unknown }
