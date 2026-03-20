@@ -72,7 +72,7 @@ export class HostEngine {
         if (nickname && nickname.trim().length > 0) {
             this.playerNicknames.set(userId, nickname.trim());
         } else if (!this.playerNicknames.has(userId)) {
-            this.playerNicknames.set(userId, userId);
+            this.playerNicknames.set(userId, this.defaultNicknameFromUserId(userId));
         }
         if (this.skillUsage.has(userId) && this.skillLastUseMs.has(userId)) {
             return;
@@ -102,6 +102,24 @@ export class HostEngine {
 
     private displayName(userId: string): string {
         return this.playerNicknames.get(userId) ?? userId;
+    }
+
+    private defaultNicknameFromUserId(userId: string): string {
+        const colors = ["赤", "青", "緑", "黄", "紫", "橙", "桃", "白", "黒", "銀"];
+        const animals = ["ねこ", "いぬ", "うさぎ", "きつね", "たぬき", "りす", "くま", "ひつじ", "ぺんぎん", "ふくろう"];
+        const hash = this.hashText(userId);
+        const color = colors[hash % colors.length];
+        const animal = animals[Math.floor(hash / colors.length) % animals.length];
+        return `${color}${animal}`;
+    }
+
+    private hashText(input: string): number {
+        let h = 2166136261;
+        for (let i = 0; i < input.length; i += 1) {
+            h ^= input.charCodeAt(i);
+            h = Math.imul(h, 16777619);
+        }
+        return h >>> 0;
     }
 
     private initializeFixedRunners(): void {
@@ -280,30 +298,37 @@ export class HostEngine {
         }
 
         if (msg.skill === "reverse") {
-            target.reverseUntilMs = nowMs + (decision.durationMs ?? msg.payload.durationMs ?? 2200);
+            this.applyToAllRunners((runner) => {
+                runner.reverseUntilMs = nowMs + this.randomizedDuration(decision.durationMs ?? msg.payload.durationMs ?? 2200);
+            });
             this.events.push(`${this.displayName(msg.fromUserId)} が反転`);
         }
 
         if (msg.skill === "speed_boost") {
-            target.speedBoostMultiplier = decision.speedMultiplier ?? 1.8;
-            target.speedBoostUntilMs = nowMs + (decision.durationMs ?? msg.payload.durationMs ?? 1600);
+            this.applyToAllRunners((runner) => {
+                runner.speedBoostMultiplier = decision.speedMultiplier ?? 1.8;
+                runner.speedBoostUntilMs = nowMs + this.randomizedDuration(decision.durationMs ?? msg.payload.durationMs ?? 1600);
+            });
             this.events.push(`${this.displayName(msg.fromUserId)} が加速`);
         }
 
         if (msg.skill === "warp") {
-            const fromLane = target.lane;
-            const fromY = target.y;
-            const requestedLane = decision.lane ?? msg.payload.laneLeft;
-            const nextLane =
-                requestedLane === undefined || requestedLane === laneIndex
-                    ? this.pickRandomOtherLane(laneIndex)
-                    : requestedLane;
-            if (nextLane < 0 || nextLane >= this.settings.laneCount) {
-                return { kind: "skill_reject", proposalId: msg.proposalId, byHostId: "host", reason: "invalid warp lane" };
+            for (const runner of this.runners.values()) {
+                const fromLane = runner.lane;
+                const fromY = runner.y;
+                const lane = Math.round(runner.lane);
+                const requestedLane = decision.lane ?? msg.payload.laneLeft;
+                const nextLane =
+                    requestedLane === undefined || requestedLane === lane
+                        ? this.pickRandomOtherLane(lane)
+                        : requestedLane;
+                if (nextLane < 0 || nextLane >= this.settings.laneCount) {
+                    return { kind: "skill_reject", proposalId: msg.proposalId, byHostId: "host", reason: "invalid warp lane" };
+                }
+                runner.lane = nextLane;
+                runner.y = clampNumber(decision.y ?? msg.payload.y ?? runner.y + 80, 0, this.settings.totalHeight);
+                this.pushEffect("warp", fromLane, fromY, nowMs, 700);
             }
-            target.lane = nextLane;
-            target.y = clampNumber(decision.y ?? msg.payload.y ?? target.y + 80, 0, this.settings.totalHeight);
-            this.pushEffect("warp", fromLane, fromY, nowMs, 700);
             this.events.push(`${this.displayName(msg.fromUserId)} がワープ`);
         }
 
@@ -319,17 +344,19 @@ export class HostEngine {
         }
 
         if (msg.skill === "cloak") {
-            target.invisibleUntilMs = nowMs + (decision.durationMs ?? msg.payload.durationMs ?? 2600);
+            const duration = decision.durationMs ?? msg.payload.durationMs ?? 2600;
+            this.applyToAllRunners((runner) => {
+                runner.invisibleUntilMs = nowMs + duration;
+            });
             this.events.push(`${this.displayName(msg.fromUserId)} が透明化`);
         }
 
         if (msg.skill === "vision_jam") {
             const until = nowMs + (decision.durationMs ?? msg.payload.durationMs ?? 2800);
-            for (const userId of this.skillUsage.keys()) {
-                if (userId === msg.fromUserId) {
-                    continue;
-                }
-                this.visionJammedUntilMsByUserId.set(userId, until);
+            const allUsers = [...this.skillUsage.keys()].filter((userId) => userId !== msg.fromUserId);
+            const picked = allUsers.length > 0 ? allUsers[(Math.random() * allUsers.length) | 0] : null;
+            if (picked) {
+                this.visionJammedUntilMsByUserId.set(picked, until);
             }
             this.events.push(`${this.displayName(msg.fromUserId)} が視野妨害`);
         }
@@ -540,6 +567,17 @@ export class HostEngine {
             createdAtMs: nowMs,
             durationMs,
         });
+    }
+
+    private applyToAllRunners(fn: (runner: InternalRunner) => void): void {
+        for (const runner of this.runners.values()) {
+            fn(runner);
+        }
+    }
+
+    private randomizedDuration(baseMs: number): number {
+        const ratio = 0.75 + Math.random() * 0.5;
+        return Math.max(300, Math.round(baseMs * ratio));
     }
 
     private decideSkill(msg: SkillProposal, target: InternalRunner, nowMs: number): WasmRuleResult {

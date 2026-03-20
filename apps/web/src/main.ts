@@ -87,7 +87,7 @@ winnerCloseBtn.addEventListener("click", () => {
 const skillGrid = document.createElement("div");
 skillGrid.className = "skill-grid";
 const skillButtons = new Map<SkillType, HTMLButtonElement>();
-let pendingTargetSkill: "add_rung" | "cut_rung" | null = null;
+let pendingTargetSkill: "add_rung" | "cut_rung" | "jump" | null = null;
 
 const hostConfig = document.createElement("div");
 hostConfig.className = "host-config";
@@ -491,9 +491,11 @@ for (const skill of skills) {
     b.className = "skill-btn";
     b.onclick = () => {
         selectedSkill = skill;
-        if (skill === "add_rung" || skill === "cut_rung") {
+        if (skill === "add_rung" || skill === "cut_rung" || skill === "jump") {
             pendingTargetSkill = skill;
-            statusBadge.textContent = `${SKILL_LABEL[skill]}: 位置をクリック`;
+            statusBadge.textContent = skill === "jump"
+                ? `${SKILL_LABEL[skill]}: 対象ランナーをクリック`
+                : `${SKILL_LABEL[skill]}: 位置をクリック`;
             return;
         }
         statusBadge.textContent = `発動: ${SKILL_LABEL[skill]}`;
@@ -764,6 +766,11 @@ function castSelectedSkill(): void {
     if (latestSnapshot.status !== "running") {
         return;
     }
+    if (selectedSkill === "jump") {
+        pendingTargetSkill = "jump";
+        statusBadge.textContent = `${SKILL_LABEL.jump}: 対象ランナーをクリック`;
+        return;
+    }
     const target = latestSnapshot.runners.find((r) => !r.finished) ?? latestSnapshot.runners[0];
     if (!target) {
         statusBadge.textContent = "対象ランナー不在";
@@ -781,9 +788,7 @@ function castSelectedSkill(): void {
         payload: {
             y: selectedSkill === "warp" ? target.y + 80 : target.y,
             laneLeft:
-                selectedSkill === "jump"
-                    ? 2
-                    : selectedSkill === "warp"
+                selectedSkill === "warp"
                         ? (lane + 1) % latestSnapshot.settings.laneCount
                         : Math.max(0, lane - 1),
             durationMs:
@@ -814,7 +819,7 @@ function sendProposal(proposal: GuestToHostMessage): void {
 function buildTargetedProposalFromClick(
     clientX: number,
     clientY: number,
-    skill: "add_rung" | "cut_rung",
+    skill: "add_rung" | "cut_rung" | "jump",
 ): GuestToHostMessage | null {
     const rendererApp = app;
     if (!rendererApp) {
@@ -831,7 +836,13 @@ function buildTargetedProposalFromClick(
     const x = ((clientX - rect.left) / rect.width) * w;
     const y = ((clientY - rect.top) / rect.height) * h;
     const worldY = clamp((y - 40) / yScale, 0, latestSnapshot.settings.totalHeight);
-    const target = latestSnapshot.runners.find((r) => !r.finished) ?? latestSnapshot.runners[0];
+    const defaultTarget = latestSnapshot.runners.find((r) => !r.finished) ?? latestSnapshot.runners[0];
+    if (!defaultTarget) {
+        return null;
+    }
+    const target = skill === "jump"
+        ? pickRunnerFromCanvasPoint(x, y, marginX, laneGap, yScale) ?? defaultTarget
+        : defaultTarget;
     if (!target) {
         return null;
     }
@@ -847,6 +858,24 @@ function buildTargetedProposalFromClick(
             targetUserId: target.userId,
             skill: "add_rung",
             payload: { laneLeft, y: worldY },
+            clientTimeMs: Date.now(),
+        };
+    }
+
+    if (skill === "jump") {
+        const lane = Math.round(target.lane);
+        return {
+            kind: "skill_proposal",
+            proposalId: crypto.randomUUID(),
+            fromUserId: userId,
+            fromNickname: resolveNickname(rtc.isHost() ? hostNicknameInput.value : guestNicknameInput.value),
+            targetUserId: target.userId,
+            skill: "jump",
+            payload: {
+                laneLeft: lane + 2,
+                y: target.y + 45,
+                durationMs: 1600,
+            },
             clientTimeMs: Date.now(),
         };
     }
@@ -876,6 +905,31 @@ function buildTargetedProposalFromClick(
         payload: { rungId: nearest.rung.id },
         clientTimeMs: Date.now(),
     };
+}
+
+function pickRunnerFromCanvasPoint(
+    x: number,
+    y: number,
+    marginX: number,
+    laneGap: number,
+    yScale: number,
+): LadderSnapshot["runners"][number] | null {
+    const candidates = latestSnapshot.runners.filter((r) => !r.finished);
+    if (candidates.length === 0) {
+        return null;
+    }
+    const nearest = candidates
+        .map((r) => {
+            const rx = marginX + r.lane * laneGap;
+            const ry = 40 + r.y * yScale;
+            const d2 = (rx - x) ** 2 + (ry - y) ** 2;
+            return { runner: r, d2 };
+        })
+        .sort((a, b) => a.d2 - b.d2)[0];
+    if (!nearest || nearest.d2 > 28 * 28) {
+        return null;
+    }
+    return nearest.runner;
 }
 
 function updateSkillButtonsUi(): void {
