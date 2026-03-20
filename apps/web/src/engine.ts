@@ -313,18 +313,21 @@ export class HostEngine {
         }
 
         if (msg.skill === "warp") {
+            const occupiedWarpLanes = new Set<number>();
             for (const runner of this.runners.values()) {
                 const fromLane = runner.lane;
                 const fromY = runner.y;
                 const lane = Math.round(runner.lane);
-                const requestedLane = decision.lane ?? msg.payload.laneLeft;
+                const candidateLanes = Array.from({ length: this.settings.laneCount }, (_, i) => i)
+                    .filter((v) => v !== lane && !occupiedWarpLanes.has(v));
                 const nextLane =
-                    requestedLane === undefined || requestedLane === lane
-                        ? this.pickRandomOtherLane(lane)
-                        : requestedLane;
+                    candidateLanes.length > 0
+                        ? candidateLanes[(Math.random() * candidateLanes.length) | 0]
+                        : this.pickRandomOtherLane(lane);
                 if (nextLane < 0 || nextLane >= this.settings.laneCount) {
                     return { kind: "skill_reject", proposalId: msg.proposalId, byHostId: "host", reason: "invalid warp lane" };
                 }
+                occupiedWarpLanes.add(nextLane);
                 runner.lane = nextLane;
                 runner.y = clampNumber(decision.y ?? msg.payload.y ?? runner.y + 80, 0, this.settings.totalHeight);
                 this.pushEffect("warp", fromLane, fromY, nowMs, 700);
