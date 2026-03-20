@@ -13,8 +13,14 @@ type PeerCallbacks = {
     onPeerChannelOpen?: (userId: string) => void;
 };
 
+const signalUrl = import.meta.env.VITE_SIGNAL_URL;
+if (!signalUrl || signalUrl.trim().length === 0) {
+    throw new Error("VITE_SIGNAL_URL is required");
+}
+
+const stunUrl = (import.meta.env.VITE_STUN_URL ?? "").trim();
 const rtcConfig: RTCConfiguration = {
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    iceServers: stunUrl.length > 0 ? [{ urls: stunUrl }] : [],
 };
 
 export class StarRtc {
@@ -28,7 +34,7 @@ export class StarRtc {
     constructor(userId: string, callbacks: PeerCallbacks) {
         this.userId = userId;
         this.callbacks = callbacks;
-        this.ws = new WebSocket("ws://localhost:8787");
+        this.ws = new WebSocket(signalUrl);
         this.ws.addEventListener("message", (e) => this.onSignalMessage(String(e.data)));
     }
 
@@ -223,6 +229,10 @@ export class StarRtc {
 
         dc.onopen = () => {
             this.callbacks.onPeerChannelOpen?.(peerId);
+        };
+        dc.onclose = () => {
+            this.callbacks.onPeerLeft?.(peerId);
+            this.peers.delete(peerId);
         };
     }
 

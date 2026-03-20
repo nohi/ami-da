@@ -28,7 +28,47 @@ npm run dev
 ```
 
 - Web: http://localhost:5173
-- Signaling: ws://localhost:8787
+
+### 環境変数サンプル
+
+`apps/web/.env.example` をコピーして `apps/web/.env` を作成してください。
+
+```bash
+cp apps/web/.env.example apps/web/.env
+```
+
+## GitHub Pages 公開（`nohi/nohi.github.io` の `/ami-da`）
+
+このリポジトリには `deploy-pages-subdir.yml` があり、`main` への push で  
+`nohi/nohi.github.io` の `main` ブランチ配下 `ami-da/` に `apps/web/dist` をデプロイします。
+
+必要な GitHub Secrets（このリポジトリ側）:
+
+- `PAGES_DEPLOY_TOKEN`  
+  `nohi/nohi.github.io` へ push できる PAT（`repo` 権限）。
+- `VITE_SIGNAL_URL`  
+  Cloudflare Workers シグナリングの `wss://...` URL。
+
+補足:
+
+- ビルド時は `VITE_BASE_PATH=/ami-da/` を CI 側で設定しています。
+- 既存ファイルを残すため `keep_files: true` でデプロイします。
+
+## Cloudflare Workers シグナリング
+
+`apps/signal` は Cloudflare Workers + Durable Objects で動作します。
+
+```bash
+npm run dev -w @amida/signal
+```
+
+デプロイ:
+
+```bash
+npx wrangler deploy --config apps/signal/wrangler.toml
+```
+
+公開URL（`wss://...workers.dev`）を `VITE_SIGNAL_URL` に設定してください。
 
 ## 実装メモ
 

@@ -1,11 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "outDir": "dist",
     "rootDir": "src",
-    "types": ["node"]
+    "lib": ["ES2022", "WebWorker"],
+    "types": ["@cloudflare/workers-types"]
   },
   "include": ["src"]
 }

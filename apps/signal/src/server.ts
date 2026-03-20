@@ -1,85 +1,92 @@
-import { WebSocketServer, type WebSocket } from "ws";
 import type { SignalClientToServer, SignalServerToClient } from "@amida/protocol";
 
-type Room = {
-  hostId: string;
-  members: Map<string, WebSocket>;
+type Env = {
+  SIGNAL_ROOMS: DurableObjectNamespace;
 };
 
-const wss = new WebSocketServer({ port: 8787 });
-const rooms = new Map<string, Room>();
-const socketMeta = new Map<WebSocket, { userId: string; roomId: string }>();
+type RoomState = {
+  hostId: string;
+  members: string[];
+};
 
-function send(socket: WebSocket, msg: SignalServerToClient): void {
-  if (socket.readyState === socket.OPEN) {
-    socket.send(JSON.stringify(msg));
+type SocketMeta = {
+  roomId: string;
+  userId: string;
+};
+
+export class SignalRoom {
+  private state: DurableObjectState;
+  private socketsByUserId = new Map<string, WebSocket>();
+  private stateByRoomId = new Map<string, RoomState>();
+  private metaBySocket = new Map<WebSocket, SocketMeta>();
+
+  constructor(state: DurableObjectState, env: Env) {
+    this.state = state;
   }
-}
 
-function broadcast(room: Room, msg: SignalServerToClient, exceptUserId?: string): void {
-  for (const [uid, ws] of room.members) {
-    if (uid !== exceptUserId) {
-      send(ws, msg);
+  async fetch(request: Request): Promise<Response> {
+    if (request.headers.get("Upgrade") !== "websocket") {
+      return new Response("Expected websocket", { status: 426 });
     }
+
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    this.state.acceptWebSocket(server);
+    return new Response(null, { status: 101, webSocket: client });
   }
-}
 
-function makeRoomId(): string {
-  return Math.random().toString(36).slice(2, 8).toUpperCase();
-}
-
-wss.on("connection", (socket) => {
-  socket.on("message", (data) => {
+  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+    const text = typeof message === "string" ? message : new TextDecoder().decode(message);
     let msg: SignalClientToServer;
     try {
-      msg = JSON.parse(String(data)) as SignalClientToServer;
+      msg = JSON.parse(text) as SignalClientToServer;
     } catch {
-      send(socket, { type: "error", message: "invalid json" });
+      this.send(ws, { type: "error", message: "invalid json" });
       return;
     }
 
     if (msg.type === "create_room") {
       const roomId = makeRoomId();
-      const room: Room = {
-        hostId: msg.userId,
-        members: new Map([[msg.userId, socket]]),
-      };
-      rooms.set(roomId, room);
-      socketMeta.set(socket, { userId: msg.userId, roomId });
-      send(socket, { type: "room_created", roomId, hostId: msg.userId });
+      this.stateByRoomId.set(roomId, { hostId: msg.userId, members: [msg.userId] });
+      this.socketsByUserId.set(msg.userId, ws);
+      this.metaBySocket.set(ws, { roomId, userId: msg.userId });
+      this.send(ws, { type: "room_created", roomId, hostId: msg.userId });
       return;
     }
 
     if (msg.type === "join_room") {
-      const room = rooms.get(msg.roomId);
+      const room = this.stateByRoomId.get(msg.roomId);
       if (!room) {
-        send(socket, { type: "error", message: "room not found" });
+        this.send(ws, { type: "error", message: "room not found" });
         return;
       }
-      room.members.set(msg.userId, socket);
-      socketMeta.set(socket, { userId: msg.userId, roomId: msg.roomId });
-      send(socket, {
+      if (!room.members.includes(msg.userId)) {
+        room.members.push(msg.userId);
+      }
+      this.socketsByUserId.set(msg.userId, ws);
+      this.metaBySocket.set(ws, { roomId: msg.roomId, userId: msg.userId });
+      this.send(ws, {
         type: "room_joined",
         roomId: msg.roomId,
         hostId: room.hostId,
-        peers: [...room.members.keys()].filter((u) => u !== msg.userId),
+        peers: room.members.filter((u) => u !== msg.userId),
       });
-      broadcast(room, { type: "peer_joined", roomId: msg.roomId, userId: msg.userId }, msg.userId);
+      this.broadcast(msg.roomId, { type: "peer_joined", roomId: msg.roomId, userId: msg.userId }, msg.userId);
       return;
     }
 
     if (msg.type === "relay") {
-      const room = rooms.get(msg.roomId);
+      const room = this.stateByRoomId.get(msg.roomId);
       if (!room) {
-        send(socket, { type: "error", message: "room not found" });
+        this.send(ws, { type: "error", message: "room not found" });
         return;
       }
-      const target = room.members.get(msg.toUserId);
+      const target = this.socketsByUserId.get(msg.toUserId);
       if (!target) {
-        send(socket, { type: "error", message: "target not found" });
+        this.send(ws, { type: "error", message: "target not found" });
         return;
       }
-      send(target, {
+      this.send(target, {
         type: "relay",
         roomId: msg.roomId,
         toUserId: msg.toUserId,
@@ -87,25 +94,76 @@ wss.on("connection", (socket) => {
         payload: msg.payload,
       });
     }
-  });
+  }
 
-  socket.on("close", () => {
-    const meta = socketMeta.get(socket);
+  webSocketClose(ws: WebSocket): void {
+    this.removeSocket(ws);
+  }
+
+  webSocketError(ws: WebSocket): void {
+    this.removeSocket(ws);
+  }
+
+  private removeSocket(ws: WebSocket): void {
+    const meta = this.metaBySocket.get(ws);
     if (!meta) {
       return;
     }
-    socketMeta.delete(socket);
-    const room = rooms.get(meta.roomId);
+    this.metaBySocket.delete(ws);
+    this.socketsByUserId.delete(meta.userId);
+
+    const room = this.stateByRoomId.get(meta.roomId);
     if (!room) {
       return;
     }
-    room.members.delete(meta.userId);
-    if (room.members.size === 0 || room.hostId === meta.userId) {
-      rooms.delete(meta.roomId);
+    room.members = room.members.filter((u) => u !== meta.userId);
+    if (room.members.length === 0 || room.hostId === meta.userId) {
+      this.stateByRoomId.delete(meta.roomId);
       return;
     }
-    broadcast(room, { type: "peer_left", roomId: meta.roomId, userId: meta.userId });
-  });
-});
+    this.broadcast(meta.roomId, { type: "peer_left", roomId: meta.roomId, userId: meta.userId });
+  }
 
-console.log("Signaling server started at ws://localhost:8787");
+  private send(socket: WebSocket, msg: SignalServerToClient): void {
+    try {
+      socket.send(JSON.stringify(msg));
+    } catch {
+      // noop
+    }
+  }
+
+  private broadcast(roomId: string, msg: SignalServerToClient, exceptUserId?: string): void {
+    const room = this.stateByRoomId.get(roomId);
+    if (!room) {
+      return;
+    }
+    for (const uid of room.members) {
+      if (uid === exceptUserId) {
+        continue;
+      }
+      const socket = this.socketsByUserId.get(uid);
+      if (socket) {
+        this.send(socket, msg);
+      }
+    }
+  }
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/healthz") {
+      return new Response("ok");
+    }
+    if (request.headers.get("Upgrade") !== "websocket") {
+      return new Response("websocket only", { status: 426 });
+    }
+    const id = env.SIGNAL_ROOMS.idFromName("global");
+    const room = env.SIGNAL_ROOMS.get(id);
+    return room.fetch(request);
+  },
+};
+
+function makeRoomId(): string {
+  return Math.random().toString(36).slice(2, 8).toUpperCase();
+}

@@ -1,21 +1,19 @@
 {
   "name": "@amida/signal",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "dev": "wrangler dev src/server.ts",
+    "build": "tsc -p tsconfig.json && wrangler deploy --dry-run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@amida/protocol": "file:../../packages/protocol",
-    "ws": "^8.18.0"
+    "@amida/protocol": "file:../../packages/protocol"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "@types/ws": "^8.5.13",
-    "tsx": "^4.19.2",
-    "typescript": "^5.9.2"
+    "@cloudflare/workers-types": "^4.20260312.0",
+    "typescript": "^5.9.2",
+    "wrangler": "^4.11.1"
   }
 }

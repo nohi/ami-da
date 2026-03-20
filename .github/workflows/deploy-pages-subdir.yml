@@ -1,0 +1,43 @@
+name: Deploy ami-da to nohi.github.io/ami-da
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web app for /ami-da
+        env:
+          VITE_BASE_PATH: /ami-da/
+          VITE_SIGNAL_URL: ${{ secrets.VITE_SIGNAL_URL }}
+        run: |
+          npm run build -w @amida/protocol
+          npm run build -w @amida/web
+
+      - name: "Deploy to nohi/nohi.github.io (subdir: ami-da)"
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+          external_repository: nohi/nohi.github.io
+          publish_branch: main
+          publish_dir: ./apps/web/dist
+          destination_dir: ami-da
+          keep_files: true
+          commit_message: "deploy ami-da from ${{ github.repository }}@${{ github.sha }}"

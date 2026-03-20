@@ -1,0 +1,11 @@
+name = "amida-signal"
+main = "src/server.ts"
+compatibility_date = "2026-03-20"
+
+[[durable_objects.bindings]]
+name = "SIGNAL_ROOMS"
+class_name = "SignalRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SignalRoom"]
