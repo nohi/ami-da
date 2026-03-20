@@ -61,9 +61,6 @@ const statusBadge = document.createElement("span");
 statusBadge.className = "badge";
 statusBadge.textContent = "未接続";
 
-const warning = document.createElement("div");
-warning.className = "warn";
-warning.textContent = "モバイルは横向きでの利用を推奨";
 const roomMemberInfo = document.createElement("div");
 roomMemberInfo.className = "warn";
 roomMemberInfo.textContent = "参加人数: 0";
@@ -71,6 +68,21 @@ const winnerBanner = document.createElement("div");
 winnerBanner.className = "winner-banner";
 winnerBanner.style.display = "none";
 let winnerBannerDismissed = false;
+const winnerCloseBtn = document.createElement("button");
+winnerCloseBtn.className = "winner-close";
+winnerCloseBtn.type = "button";
+winnerCloseBtn.setAttribute("aria-label", "抽選結果を閉じる");
+winnerCloseBtn.textContent = "×";
+const winnerTitle = document.createElement("div");
+winnerTitle.className = "winner-title";
+winnerTitle.textContent = "🎉 当選結果 🎉";
+const winnerNames = document.createElement("div");
+winnerNames.className = "winner-names";
+winnerBanner.append(winnerCloseBtn, winnerTitle, winnerNames);
+winnerCloseBtn.addEventListener("click", () => {
+    winnerBannerDismissed = true;
+    winnerBanner.style.display = "none";
+});
 
 const skillGrid = document.createElement("div");
 skillGrid.className = "skill-grid";
@@ -202,7 +214,7 @@ rowStatus.append(statusBadge);
 
 const setupSection = document.createElement("div");
 setupSection.className = "setup-section";
-setupSection.append(row1, rowJoin, rowStatus, row2, hostConfig, roomMemberInfo, warning);
+setupSection.append(row1, rowJoin, rowStatus, row2, hostConfig, roomMemberInfo);
 
 hostConfig.innerHTML = `
   <div class="row"><strong>ホスト設定</strong></div>
@@ -912,16 +924,7 @@ function showWinnerBanner(): void {
         .sort((a, b) => a.lane - b.lane)
         .slice(0, Math.max(1, latestSnapshot.settings.runnerCount));
     const names = winners.map((w) => w.name).join(" / ");
-    winnerBanner.innerHTML = `
-      <button class="winner-close" type="button" aria-label="抽選結果を閉じる">×</button>
-      <div class="winner-title">🎉 当選結果 🎉</div>
-      <div class="winner-names">${names}</div>
-    `;
-    const closeBtn = winnerBanner.querySelector<HTMLButtonElement>(".winner-close");
-    closeBtn?.addEventListener("click", () => {
-        winnerBannerDismissed = true;
-        winnerBanner.style.display = "none";
-    });
+    winnerNames.textContent = names;
     winnerBanner.style.display = "block";
 }
 
