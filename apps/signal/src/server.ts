@@ -90,7 +90,8 @@ export class SignalRoom {
         return;
       }
       const hostSocket = this.socketsByUserId.get(room.hostId);
-      if (!hostSocket) {
+      const isHostRejoin = msg.userId === room.hostId;
+      if (!hostSocket && !isHostRejoin) {
         if (Date.now() - (room.hostLastSeenMs ?? 0) > HOST_RECONNECT_GRACE_MS) {
           this.stateByRoomId.delete(roomId);
           await this.state.storage.delete(`room:${roomId}`);
