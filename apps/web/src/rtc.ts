@@ -30,6 +30,7 @@ export class StarRtc {
     private hostId = "";
     private peers = new Map<string, { pc: RTCPeerConnection; dc?: RTCDataChannel }>();
     private callbacks: PeerCallbacks;
+    private readonly signalTimeoutMs = 12_000;
 
     constructor(userId: string, callbacks: PeerCallbacks) {
         this.userId = userId;
@@ -41,17 +42,13 @@ export class StarRtc {
     createRoom(): Promise<string> {
         return this.awaitReady(() => {
             this.sendSignal({ type: "create_room", userId: this.userId });
-            return new Promise((resolve) => {
-                const handler = (ev: MessageEvent) => {
-                    const msg = JSON.parse(String(ev.data)) as SignalServerToClient;
-                    if (msg.type === "room_created") {
-                        this.roomId = msg.roomId;
-                        this.hostId = msg.hostId;
-                        this.ws.removeEventListener("message", handler);
-                        resolve(msg.roomId);
-                    }
-                };
-                this.ws.addEventListener("message", handler);
+            return this.waitForSignal(
+                (msg): msg is Extract<SignalServerToClient, { type: "room_created" }> => msg.type === "room_created",
+                this.signalTimeoutMs,
+            ).then((msg) => {
+                this.roomId = msg.roomId;
+                this.hostId = msg.hostId;
+                return msg.roomId;
             });
         });
     }
@@ -59,7 +56,11 @@ export class StarRtc {
     async joinRoom(roomId: string): Promise<void> {
         await this.awaitReady(() => {
             this.sendSignal({ type: "join_room", roomId, userId: this.userId });
-            return Promise.resolve();
+            return this.waitForSignal(
+                (msg): msg is Extract<SignalServerToClient, { type: "room_joined" }> =>
+                    msg.type === "room_joined" && msg.roomId === roomId,
+                this.signalTimeoutMs,
+            ).then(() => undefined);
         });
         this.roomId = roomId;
     }
@@ -237,6 +238,9 @@ export class StarRtc {
     }
 
     private sendSignal(msg: SignalClientToServer): void {
+        if (this.ws.readyState !== WebSocket.OPEN) {
+            throw new Error("signaling socket is not connected");
+        }
         this.ws.send(JSON.stringify(msg));
     }
 
@@ -244,13 +248,74 @@ export class StarRtc {
         if (this.ws.readyState === WebSocket.OPEN) {
             return fn();
         }
-        await new Promise<void>((resolve) => {
-            const h = () => {
-                this.ws.removeEventListener("open", h);
+        await new Promise<void>((resolve, reject) => {
+            const onOpen = () => {
+                cleanup();
                 resolve();
             };
-            this.ws.addEventListener("open", h);
+            const onError = () => {
+                cleanup();
+                reject(new Error("failed to connect signaling socket"));
+            };
+            const onClose = () => {
+                cleanup();
+                reject(new Error("signaling socket closed before ready"));
+            };
+            const timer = window.setTimeout(() => {
+                cleanup();
+                reject(new Error("timed out waiting signaling connection"));
+            }, this.signalTimeoutMs);
+            const cleanup = () => {
+                window.clearTimeout(timer);
+                this.ws.removeEventListener("open", onOpen);
+                this.ws.removeEventListener("error", onError);
+                this.ws.removeEventListener("close", onClose);
+            };
+            this.ws.addEventListener("open", onOpen);
+            this.ws.addEventListener("error", onError);
+            this.ws.addEventListener("close", onClose);
         });
         return fn();
+    }
+
+    private waitForSignal<T extends SignalServerToClient>(
+        guard: (msg: SignalServerToClient) => msg is T,
+        timeoutMs: number,
+    ): Promise<T> {
+        return new Promise<T>((resolve, reject) => {
+            const onMessage = (ev: MessageEvent) => {
+                let msg: SignalServerToClient;
+                try {
+                    msg = JSON.parse(String(ev.data)) as SignalServerToClient;
+                } catch {
+                    return;
+                }
+                if (msg.type === "error") {
+                    cleanup();
+                    reject(new Error(`signaling error: ${msg.message}`));
+                    return;
+                }
+                if (!guard(msg)) {
+                    return;
+                }
+                cleanup();
+                resolve(msg);
+            };
+            const onClose = () => {
+                cleanup();
+                reject(new Error("signaling socket closed while waiting response"));
+            };
+            const timer = window.setTimeout(() => {
+                cleanup();
+                reject(new Error("timed out waiting signaling response"));
+            }, timeoutMs);
+            const cleanup = () => {
+                window.clearTimeout(timer);
+                this.ws.removeEventListener("message", onMessage);
+                this.ws.removeEventListener("close", onClose);
+            };
+            this.ws.addEventListener("message", onMessage);
+            this.ws.addEventListener("close", onClose);
+        });
     }
 }

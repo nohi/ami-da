@@ -307,15 +307,19 @@ let rtc = new StarRtc(userId, {
 updateRoleUi();
 
 createBtn.onclick = async () => {
-    const settings = buildSettingsFromUi();
-    hostEngine = new HostEngine(settings, wasmDecider);
-    hostEngine.registerPlayer(userId, resolveNickname(hostNicknameInput.value));
-    roomId = await rtc.createRoom();
-    roomInput.value = roomId;
-    statusBadge.textContent = `ルーム作成: ${roomId}`;
-    latestSnapshot = hostEngine.update(Date.now(), 0);
-    gameView.render(latestSnapshot, userId);
-    updateRoleUi();
+    try {
+        const settings = buildSettingsFromUi();
+        hostEngine = new HostEngine(settings, wasmDecider);
+        hostEngine.registerPlayer(userId, resolveNickname(hostNicknameInput.value));
+        roomId = await rtc.createRoom();
+        roomInput.value = roomId;
+        statusBadge.textContent = `ルーム作成: ${roomId}`;
+        latestSnapshot = hostEngine.update(Date.now(), 0);
+        gameView.render(latestSnapshot, userId);
+        updateRoleUi();
+    } catch (err) {
+        statusBadge.textContent = `作成失敗: ${String(err)}`;
+    }
 };
 
 async function joinCurrentRoom(): Promise<void> {
@@ -324,15 +328,19 @@ async function joinCurrentRoom(): Promise<void> {
         statusBadge.textContent = "ROOM ID必須";
         return;
     }
-    await rtc.joinRoom(roomId);
-    statusBadge.textContent = `参加済み: ${roomId}`;
-    rtc.sendToHost({
-        kind: "request_snapshot",
-        fromUserId: userId,
-        fromNickname: resolveNickname(guestNicknameInput.value),
-        clientTimeMs: Date.now(),
-    });
-    updateRoleUi();
+    try {
+        await rtc.joinRoom(roomId);
+        statusBadge.textContent = `参加済み: ${roomId}`;
+        rtc.sendToHost({
+            kind: "request_snapshot",
+            fromUserId: userId,
+            fromNickname: resolveNickname(guestNicknameInput.value),
+            clientTimeMs: Date.now(),
+        });
+        updateRoleUi();
+    } catch (err) {
+        statusBadge.textContent = `参加失敗: ${String(err)}`;
+    }
 }
 
 joinBtn.onclick = () => {
