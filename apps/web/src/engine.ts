@@ -228,6 +228,18 @@ export class HostEngine {
             }
 
             if (runner.y >= this.settings.totalHeight) {
+                const resultLane = Math.round(runner.lane);
+                if (!this.settings.rules.allowDuplicateWinners && this.isLaneAlreadyWon(resultLane, runner.userId)) {
+                    const rerollLane = (Math.random() * this.settings.laneCount) | 0;
+                    const rerollY = this.randomRespawnY();
+                    this.pushEffect("warp", runner.lane, runner.y, nowMs, 620);
+                    runner.lane = rerollLane;
+                    runner.y = rerollY;
+                    runner.crossing = null;
+                    runner.lastCrossedRungId = null;
+                    this.events.push(`${this.displayName(runner.userId)} は重複回避で再配置`);
+                    continue;
+                }
                 runner.finished = true;
                 runner.resultLane = runner.lane;
             }
@@ -581,6 +593,16 @@ export class HostEngine {
     private randomizedDuration(baseMs: number): number {
         const ratio = 0.75 + Math.random() * 0.5;
         return Math.max(300, Math.round(baseMs * ratio));
+    }
+
+    private isLaneAlreadyWon(lane: number, selfUserId: string): boolean {
+        return [...this.runners.values()].some((r) => r.userId !== selfUserId && r.finished && Math.round(r.resultLane ?? r.lane) === lane);
+    }
+
+    private randomRespawnY(): number {
+        const minY = Math.max(0, this.settings.totalHeight * 0.25);
+        const maxY = Math.max(minY + 1, this.settings.totalHeight * 0.7);
+        return minY + Math.random() * (maxY - minY);
     }
 
     private decideSkill(msg: SkillProposal, target: InternalRunner, nowMs: number): WasmRuleResult {

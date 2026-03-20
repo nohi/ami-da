@@ -116,6 +116,9 @@ protectedTopInput.value = "90";
 const protectedBottomInput = document.createElement("input");
 protectedBottomInput.type = "number";
 protectedBottomInput.value = "120";
+const allowDuplicateWinnersInput = document.createElement("input");
+allowDuplicateWinnersInput.type = "checkbox";
+allowDuplicateWinnersInput.checked = false;
 
 const maxAddInput = document.createElement("input");
 maxAddInput.type = "number";
@@ -222,6 +225,7 @@ hostConfig.innerHTML = `
   <div class="row compact-row"><label>当選数(キャラ数)</label></div>
   <div class="row compact-row"><label>抽選名</label></div>
   <div class="row compact-row"><label>禁止距離(上/下)</label></div>
+  <div class="row compact-row"><label>重複当選</label></div>
   <div class="row compact-row"><label>スキル設定</label></div>
 `;
 
@@ -230,6 +234,11 @@ hostRows[0].append(laneCountInput);
 hostRows[1].append(runnerCountInput);
 hostRows[2].append(drawNamesInput);
 hostRows[3].append(protectedTopInput, protectedBottomInput);
+const duplicateLabel = document.createElement("label");
+duplicateLabel.className = "toggle";
+duplicateLabel.textContent = "有効";
+duplicateLabel.prepend(allowDuplicateWinnersInput);
+hostRows[4].append(duplicateLabel);
 const skillTable = document.createElement("table");
 skillTable.className = "skill-table";
 skillTable.innerHTML = `
@@ -252,7 +261,7 @@ skillTableBody.append(
     createSkillSettingRow("透明化", allowCloakInput, maxCloakInput, cdCloakInput),
     createSkillSettingRow("視野妨害", allowVisionJamInput, maxVisionJamInput, cdVisionJamInput),
 );
-hostRows[4].append(skillTable);
+hostRows[5].append(skillTable);
 
 overlay.append(setupSection, skillGrid);
 appRoot.append(overlay, winnerBanner);
@@ -662,6 +671,7 @@ function buildSettingsFromUi(): LadderSettings {
             },
             protectedTopDistance: clamp(readInt(protectedTopInput.value, 90), 0, 1000),
             protectedBottomDistance: clamp(readInt(protectedBottomInput.value, 120), 0, 1000),
+            allowDuplicateWinners: allowDuplicateWinnersInput.checked,
         },
     };
 }

@@ -24,6 +24,7 @@ export const DEFAULT_RULES: LadderRuleSet = {
     },
     protectedTopDistance: 90,
     protectedBottomDistance: 120,
+    allowDuplicateWinners: false,
 };
 
 export const SKILL_LABEL: Record<SkillType, string> = {

@@ -16,6 +16,7 @@ export type LadderRuleSet = {
     cooldownMs: Record<SkillType, number>;
     protectedTopDistance: number;
     protectedBottomDistance: number;
+    allowDuplicateWinners: boolean;
 };
 
 export type LadderSettings = {
