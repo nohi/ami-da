@@ -207,11 +207,11 @@ overlay.innerHTML = "<div class='row'><strong>干渉あみだくじ</strong></di
 
 const row1 = document.createElement("div");
 row1.className = "row";
-row1.append(hostNicknameInput, createBtn);
+row1.append(hostNicknameInput, createBtn, shareRoomUrlBtn);
 
 const rowJoin = document.createElement("div");
 rowJoin.className = "row";
-rowJoin.append(guestNicknameInput, roomInput, joinBtn, shareRoomUrlBtn);
+rowJoin.append(guestNicknameInput, roomInput, joinBtn);
 
 const row2 = document.createElement("div");
 row2.className = "row";
