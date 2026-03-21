@@ -8,15 +8,13 @@ import type {
     SkillProposal,
     SkillType,
     VisualEffect,
-    WasmRuleInput,
-    WasmRuleResult,
 } from "@amida/protocol";
 
 type RunnerDirection = 1 | -1;
 
 type InternalRunner = RunnerState & {
     direction: RunnerDirection;
-    /** speed_boost 中の速度倍率。WASM が使用回数に応じて逓減させる。 */
+    /** speed_boost 中の速度倍率。 */
     speedBoostMultiplier: number;
     crossing:
     | {
@@ -31,8 +29,14 @@ type InternalRunner = RunnerState & {
     lastCrossedRungId: string | null;
 };
 
-type HostSkillDecider = {
-    validateSkill(input: WasmRuleInput): WasmRuleResult;
+type SkillDecision = {
+    ok: boolean;
+    reason?: string;
+    lane?: number;
+    y?: number;
+    durationMs?: number;
+    speedMultiplier?: number;
+    laneLeft?: number;
 };
 
 export class HostEngine {
@@ -46,17 +50,11 @@ export class HostEngine {
     private status: LadderSnapshot["status"] = "waiting";
     private events: string[] = [];
     private effects: VisualEffect[] = [];
-    private decider: HostSkillDecider | null;
 
-    constructor(settings: LadderSettings, decider: HostSkillDecider | null = null) {
+    constructor(settings: LadderSettings) {
         this.settings = settings;
-        this.decider = decider;
         this.generateInitialRungs();
         this.initializeFixedRunners();
-    }
-
-    setDecider(decider: HostSkillDecider | null): void {
-        this.decider = decider;
     }
 
     setSettings(next: LadderSettings): void {
@@ -618,41 +616,11 @@ export class HostEngine {
         return minY + Math.random() * (maxY - minY);
     }
 
-    private decideSkill(msg: SkillProposal, target: InternalRunner, nowMs: number): WasmRuleResult {
+    private decideSkill(msg: SkillProposal, target: InternalRunner, nowMs: number): SkillDecision {
         const usage = this.skillUsage.get(msg.fromUserId);
         const lastUse = this.skillLastUseMs.get(msg.fromUserId);
         if (!usage || !lastUse) {
             return { ok: false, reason: "state missing" };
-        }
-
-        if (this.decider) {
-            try {
-                const result = this.decider.validateSkill({
-                    settings: this.settings,
-                    runner: {
-                        userId: target.userId,
-                        lane: Math.round(target.lane),
-                        y: target.y,
-                        speed: target.speed,
-                        reverseUntilMs: target.reverseUntilMs,
-                        speedBoostUntilMs: target.speedBoostUntilMs,
-                        invisibleUntilMs: target.invisibleUntilMs,
-                        visionJammedUntilMs: target.visionJammedUntilMs,
-                        finished: target.finished,
-                        resultLane: target.resultLane,
-                    },
-                    usage,
-                    lastUseMs: lastUse,
-                    proposal: msg,
-                    nowMs,
-                });
-                if (!result.ok) {
-                    return result;
-                }
-                return result;
-            } catch {
-                // Fallback to TS rule checks if wasm is unavailable at runtime.
-            }
         }
 
         const top = this.settings.rules.protectedTopDistance;

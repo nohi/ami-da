@@ -137,27 +137,3 @@ export type SignalServerToClient =
     | { type: "peer_left"; roomId: string; userId: string }
     | { type: "relay"; roomId: string; toUserId: string; fromUserId: string; payload: unknown }
     | { type: "error"; message: string };
-
-export type WasmRuleInput = {
-    settings: LadderSettings;
-    runner: RunnerState;
-    usage: Record<SkillType, number>;
-    lastUseMs: Record<SkillType, number>;
-    proposal: SkillProposal;
-    nowMs: number;
-};
-
-export type WasmRuleResult = {
-    ok: boolean;
-    reason?: string;
-    /** 移動先レーン（warp / jump） */
-    lane?: number;
-    /** 移動先 or rung 配置 Y 座標 */
-    y?: number;
-    /** スキル持続時間 (ms) */
-    durationMs?: number;
-    /** speed_boost の速度倍率（デフォルト 1.8）。使用回数で逓減。 */
-    speedMultiplier?: number;
-    /** add_rung で配置するレーン左端インデックス */
-    laneLeft?: number;
-};

@@ -54,7 +54,6 @@ curl https://amida-signal.nohi.workers.dev/healthz
 
 - `VITE_SIGNAL_URL` = `wss://<your-worker>.workers.dev`
 - `PAGES_DEPLOY_TOKEN` = `nohi/nohi.github.io` に push できる PAT
-- （任意）`VITE_WASM_JS_URL` は通常 **未設定**（未設定時はTSフォールバック）
 
 ### 3-2. CI でデプロイ（推奨）
 
@@ -93,7 +92,6 @@ npm run build -w @amida/web
 - 別ブラウザからルーム参加できる
 - 抽選開始、スキル使用、再抽選が動作する
 - ブラウザコンソールに `VITE_SIGNAL_URL is required` や WebSocket 接続エラーがない
-- ブラウザコンソールに `ladder_core.js 404` が出ない（`VITE_WASM_JS_URL` 未設定で回避）
 
 ## 6. トラブルシュート
 

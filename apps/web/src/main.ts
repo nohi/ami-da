@@ -4,7 +4,6 @@ import { HostEngine } from "./engine";
 import { StarRtc } from "./rtc";
 import { makeDefaultSettings, SKILL_LABEL } from "./types";
 import { GameView } from "./view";
-import { loadWasmCore, type WasmHostDecider } from "./wasmCore";
 import "./style.css";
 
 const appRoot = document.querySelector("#app");
@@ -273,8 +272,6 @@ overlay.append(setupSection, skillGrid);
 appRoot.append(overlay, flashMessage, winnerBanner);
 
 let hostEngine = new HostEngine(makeDefaultSettings(6));
-let wasmDecider: WasmHostDecider | null = await loadWasmCore();
-hostEngine.setDecider(wasmDecider);
 
 let app: Application | null = null;
 let gameView: Pick<GameView, "render"> = { render: () => undefined };
@@ -411,7 +408,7 @@ createBtn.onclick = async () => {
     setLoading(true, "ルーム作成中...");
     try {
         const settings = buildSettingsFromUi();
-        hostEngine = new HostEngine(settings, wasmDecider);
+        hostEngine = new HostEngine(settings);
         hostEngine.registerPlayer(userId, resolveNickname(hostNicknameInput.value));
         roomId = await rtc.createRoom();
         roomInput.value = roomId;
@@ -519,7 +516,7 @@ applySettingsBtn.onclick = () => {
     }
 
     const settings = buildSettingsFromUi();
-    hostEngine = new HostEngine(settings, wasmDecider);
+    hostEngine = new HostEngine(settings);
     hostEngine.registerPlayer(userId, resolveNickname(hostNicknameInput.value));
     latestSnapshot = hostEngine.update(Date.now(), 0);
     broadcastSnapshot();

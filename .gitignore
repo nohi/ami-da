@@ -7,6 +7,4 @@ apps/web/.vite/
 apps/web/dist/
 apps/signal/dist/
 apps/signal/.wrangler/
-crates/ladder-core/target/
-crates/ladder-core/pkg/
 *.code-workspace

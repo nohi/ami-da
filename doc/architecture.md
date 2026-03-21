@@ -18,7 +18,7 @@ flowchart LR
     DO["Durable Object<br/>SignalRoom"]
   end
 
-  Host["Host Browser<br/>(Game Authority + WASM)"]
+  Host["Host Browser<br/>(Game Authority + TypeScript)"]
   Guest["Guest Browser"]
 
   Repo --> Actions --> Pages
@@ -39,8 +39,6 @@ flowchart LR
   - `StarRtc` が Worker シグナリング経由で WebRTC 接続確立
 - `apps/web/src/engine.ts`（ホスト権威）
   - ルール検証、状態更新、スナップショット生成、イベント管理
-- `crates/ladder-core`（Rust/WASM）
-  - スキル適用判定の一部を高速・厳密に実行（未利用時はTSフォールバック）
 - `apps/signal`（Cloudflare Worker + Durable Object）
   - ルーム管理、参加通知、SDP/ICE relay
   - ゲーム状態は保持しない（シグナリング専用）
@@ -82,8 +80,6 @@ flowchart TD
   GuestInput["Guest Input/Skill"] --> Proposal["GuestToHostMessage"]
   Proposal --> DC["WebRTC DataChannel"]
   DC --> HostEngine["HostEngine"]
-  HostEngine --> Wasm["WASM validate_skill"]
-  Wasm --> HostEngine
   HostEngine --> Snapshot["LadderSnapshot"]
   Snapshot --> Broadcast["HostToGuestMessage(snapshot/result)"]
   Broadcast --> DC

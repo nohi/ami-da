@@ -1,79 +1,50 @@
-# 多人数干渉型あみだくじ (WIP)
+# 多人数干渉型あみだくじ
 
-Rust/WASMコア + WebRTC + Pixi.js を前提にした、ホスト権威型の多人数干渉あみだくじです。
+TypeScript + WebRTC + Pixi.js で実装した、ホスト権威型の多人数干渉あみだくじです。
+WebRTCのシグナリングサーバーはCloudflare Workersで動作させています。
+全てのコードはAIエージェント(gpt-5.3-codex)で実装されています。
 
-## 現在の実装ステータス
+## アプリケーションについて
 
-- Phase 1 開始
-- MVPスキル実装済み:
-  - 線追加
-  - 線斬り
-  - 進行方向反転
-  - スピードアップ
-  - ワープ
-  - ジャンプ
-  - 透明化
-  - 視野妨害
-- ホスト権威同期:
-  - ゲストは Proposal を送信
-  - ホストで検証し Accept / Reject を全体配信
-  - WASMデシジョン連携（利用不可時はTSフォールバック）
+### アプリケーションURL
 
-## セットアップ
+https://nohi.github.io/ami-da/
 
-```bash
-npm install
-npm run build:wasm
-npm run dev
-```
+### アプリケーション説明
 
-- Web: http://localhost:5173
+- ホスト1名がルームを作成し、ゲストがルームIDを指定して参加します。
+  - 抽選中でもゲストは参加可能です
+- ホストはあみだくじの設定、開始、再抽選などが行えます。抽選に関してはゲストと同等のプレイヤーとして扱われます。
+- あみだくじの抽選中、各プレイヤーは様々なスキルを使用してあみだくじの抽選過程に干渉できます。
 
-### 環境変数サンプル
+### スキル説明
 
-`apps/web/.env.example` をコピーして `apps/web/.env` を作成してください。
+| Skill | 説明 |
+| :---: | :--- |
+| 線追加（`add_rung`） | クリックした位置に横線を1本追加します（隣接レーン間）。 |
+| 線斬り（`cut_rung`） | 選択した横線を無効化して通行不能にします。 |
+| 反転（`reverse`） | 一定時間、全ランナーの進行方向が逆向きになります。 |
+| 加速（`speed_boost`） | 一定時間、全ランナーの移動速度が上昇します。 |
+| ワープ（`warp`） | 全ランナーを別レーンへランダム再配置し、Y座標も少し先へ進めます。 |
+| ジャンプ（`jump`） | 選択したランナーを横方向に大きく移動させ、少し前進させます。 |
+| 透明化（`cloak`） | 一定時間、全ランナーが非表示になります。 |
+| 視野妨害（`vision_jam`） | 発動者以外の参加者からランダムで1名を対象に、一定時間視界を狭める妨害を与えます。 |
 
-```bash
-cp apps/web/.env.example apps/web/.env
-```
+※ 共通ルール
 
-## GitHub Pages 公開（`nohi/nohi.github.io` の `/ami-da`）
+- スキルごとに使用可否・回数上限・CT（クールタイム）をホストが設定できます。
+- ランナーが上部/下部の保護範囲にいる場合、スキルは発動できません。
+- すべてのスキル判定はホスト側で行われます（ホスト権威）。
 
-このリポジトリには `deploy-pages-subdir.yml` があり、`main` への push で  
-`nohi/nohi.github.io` の `main` ブランチ配下 `ami-da/` に `apps/web/dist` をデプロイします。
 
-必要な GitHub Secrets（このリポジトリ側）:
+### Known issues
 
-- `PAGES_DEPLOY_TOKEN`  
-  `nohi/nohi.github.io` へ push できる PAT（`repo` 権限）。
-- `VITE_SIGNAL_URL`  
-  Cloudflare Workers シグナリングの `wss://...` URL。
+- Chrome/Edge <--> Firefox間でルームの参加ができない
+  - Chrome/Edgeなどでアクセスしてください
 
-補足:
+## Development
 
-- ビルド時は `VITE_BASE_PATH=/ami-da/` を CI 側で設定しています。
-- 既存ファイルを残すため `keep_files: true` でデプロイします。
-- Pages 本番では `VITE_WASM_JS_URL` を未設定にしてください（TSフォールバックで動作）。
+- [architecture](./doc/architecture.md)
+- [setup and develop](./doc/setup_and_development.md)
+- [deploy](./doc/deployment.md)
 
-## Cloudflare Workers シグナリング
-
-`apps/signal` は Cloudflare Workers + Durable Objects で動作します。
-
-```bash
-npm run dev -w @amida/signal
-```
-
-デプロイ:
-
-```bash
-npx wrangler deploy --config apps/signal/wrangler.toml
-```
-
-公開URL（`wss://...workers.dev`）を `VITE_SIGNAL_URL` に設定してください。
-
-## 実装メモ
-
-- ホスト判定は Rust/WASM の `validate_skill` を優先利用（未生成時はTSへフォールバック）。
-- WASM生成物は `crates/ladder-core/pkg` に出力される（ローカル検証向け）。
-- 追加干渉: 透明化、視野妨害。
-- 強化演出: ワープ、ジャンプ、線斬り。
