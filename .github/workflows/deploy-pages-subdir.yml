@@ -1,8 +1,8 @@
 name: Deploy ami-da to nohi.github.io/ami-da
 
 on:
-  push:
-    branches: [ "main" ]
+  # push:
+  #   branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
