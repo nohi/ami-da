@@ -332,6 +332,9 @@ export class HostEngine {
         if (msg.skill === "warp") {
             const occupiedWarpLanes = new Set<number>();
             for (const runner of this.runners.values()) {
+                if (runner.finished) {
+                    continue;
+                }
                 const fromLane = runner.lane;
                 const fromY = runner.y;
                 const lane = Math.round(runner.lane);
